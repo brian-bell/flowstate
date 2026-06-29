@@ -279,9 +279,13 @@ func runServe(args []string, deps runDeps) error {
 	if err := server.ValidateListenAddress(*listen); err != nil {
 		return err
 	}
+	cfg, err := deps.loadConfig()
+	if err != nil {
+		return fmt.Errorf("error loading config: %w", err)
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := deps.serve(ctx, serveOptions{Listen: *listen, Stdout: deps.stdout}); err != nil {
+	if err := deps.serve(ctx, serveOptions{Listen: *listen, StateRoot: runtimeArtifactRootWithEnv(cfg, deps.getenv), Stdout: deps.stdout}); err != nil {
 		return fmt.Errorf("serve: %w", err)
 	}
 	return nil
@@ -439,13 +443,17 @@ func modelOptionsFromConfig(cfg config.Config, scanRepos func() ([]scanner.Repo,
 }
 
 func runtimeArtifactRoot(cfg config.Config) string {
-	if envRoot := os.Getenv("FLOWSTATE_FLOW_STATE_ROOT"); envRoot != "" {
+	return runtimeArtifactRootWithEnv(cfg, os.Getenv)
+}
+
+func runtimeArtifactRootWithEnv(cfg config.Config, getenv func(string) string) string {
+	if envRoot := getenv("FLOWSTATE_FLOW_STATE_ROOT"); envRoot != "" {
 		return envRoot
 	}
-	if envRoot := os.Getenv("FLOWSTATE_PLAN_STATE_ROOT"); envRoot != "" {
+	if envRoot := getenv("FLOWSTATE_PLAN_STATE_ROOT"); envRoot != "" {
 		return envRoot
 	}
-	if envRoot := os.Getenv("FLOWSTATE_SESSION_STATE_ROOT"); envRoot != "" {
+	if envRoot := getenv("FLOWSTATE_SESSION_STATE_ROOT"); envRoot != "" {
 		return envRoot
 	}
 	return cfg.Sessions.Root

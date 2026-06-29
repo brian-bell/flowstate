@@ -9,22 +9,29 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
+	"path"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/99designs/gqlgen/graphql/handler"
 	"github.com/99designs/gqlgen/graphql/handler/transport"
+	"github.com/brian-bell/flowstate/flowstore"
+	"github.com/brian-bell/flowstate/server/flowquery"
 	"github.com/brian-bell/flowstate/server/graph"
 	"github.com/brian-bell/flowstate/server/graph/generated"
+	"github.com/brian-bell/flowstate/server/webassets"
 )
 
 //go:embed graph/schema.graphqls
 var schemaGraphQL string
+
+const DefaultSPAShell = "_shell.html"
 
 type HandlerOptions struct {
 	Token          string
@@ -32,16 +39,27 @@ type HandlerOptions struct {
 	ListenerPort   string
 	Scope          ListenerScope
 	AllowIPv6Alias bool
+	FlowReader     FlowReader
+	RuntimeJobs    flowquery.RuntimeJobLookup
+	StaticAssets   fs.FS
+	SPAShell       string
 }
 
 type Options struct {
-	Listen  string
-	Token   string
-	Stdout  io.Writer
-	Started chan<- Started
+	Listen      string
+	Token       string
+	StateRoot   string
+	RuntimeJobs flowquery.RuntimeJobLookup
+	Stdout      io.Writer
+	Started     chan<- Started
 
 	resolve ListenResolveOptions
 	listen  func(network string, address string) (net.Listener, error)
+}
+
+type FlowReader interface {
+	List(flowstore.FlowFilter) ([]flowstore.FlowRecord, error)
+	Read(string) (flowstore.FlowRecord, error)
 }
 
 type Started struct {
@@ -61,6 +79,10 @@ func Run(ctx context.Context, opts Options) error {
 			return err
 		}
 		token = generated
+	}
+	flowReader, err := flowstore.NewStore(flowstore.StoreOptions{Root: opts.StateRoot})
+	if err != nil {
+		return err
 	}
 
 	listen := net.Listen
@@ -83,6 +105,8 @@ func Run(ctx context.Context, opts Options) error {
 		ListenerPort:   listenerPort,
 		Scope:          resolvedListen.Scope,
 		AllowIPv6Alias: resolvedListen.Scope == ListenerScopeLoopback && listenerHost == "::1",
+		FlowReader:     flowReader,
+		RuntimeJobs:    opts.RuntimeJobs,
 	})
 	if err != nil {
 		return err
@@ -132,6 +156,10 @@ func NewHandler(opts HandlerOptions) (http.Handler, error) {
 	if opts.ListenerHost == "" || opts.ListenerPort == "" {
 		return nil, errors.New("listener host and port are required")
 	}
+	staticAssets, spaShell, err := staticAssetOptions(opts)
+	if err != nil {
+		return nil, err
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		if !allowGetOrHead(w, r) {
@@ -149,10 +177,94 @@ func NewHandler(opts HandlerOptions) (http.Handler, error) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(schemaGraphQL))
 	})
-	graphqlHandler := handler.New(generated.NewExecutableSchema(generated.Config{Resolvers: &graph.Resolver{}}))
+	graphqlHandler := handler.New(generated.NewExecutableSchema(generated.Config{Resolvers: &graph.Resolver{
+		FlowReader:  opts.FlowReader,
+		RuntimeJobs: opts.RuntimeJobs,
+	}}))
 	graphqlHandler.AddTransport(transport.POST{})
 	mux.Handle("/graphql", requireBearerToken(opts.Token, graphqlHandler))
+	mux.Handle("/", newStaticSPAHandler(staticAssets, spaShell))
 	return requireAllowedHost(opts, requireAllowedOrigin(opts, mux)), nil
+}
+
+func staticAssetOptions(opts HandlerOptions) (fs.FS, string, error) {
+	staticAssets := opts.StaticAssets
+	if staticAssets == nil {
+		staticAssets = webassets.Assets()
+	}
+	spaShell := opts.SPAShell
+	if spaShell == "" {
+		spaShell = DefaultSPAShell
+	}
+	if !fs.ValidPath(spaShell) || strings.HasPrefix(spaShell, ".") || strings.HasSuffix(spaShell, "/") {
+		return nil, "", fmt.Errorf("SPA shell path must be a clean relative file path: %q", spaShell)
+	}
+	info, err := fs.Stat(staticAssets, spaShell)
+	if err != nil {
+		return nil, "", fmt.Errorf("SPA shell %q is missing from static assets: %w", spaShell, err)
+	}
+	if info.IsDir() {
+		return nil, "", fmt.Errorf("SPA shell %q is a directory", spaShell)
+	}
+	return staticAssets, spaShell, nil
+}
+
+func newStaticSPAHandler(staticAssets fs.FS, spaShell string) http.Handler {
+	fileServer := http.FileServer(http.FS(staticAssets))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isReservedAPIPath(r.URL.Path) {
+			http.NotFound(w, r)
+			return
+		}
+		if !allowGetOrHead(w, r) {
+			return
+		}
+		if staticFileName, ok := exactStaticFile(staticAssets, r.URL.Path); ok {
+			serveStaticPath(fileServer, w, r, staticFileName)
+			return
+		}
+		if isStaticAssetRequest(r.URL.Path) {
+			http.NotFound(w, r)
+			return
+		}
+		serveStaticPath(fileServer, w, r, spaShell)
+	})
+}
+
+func isReservedAPIPath(requestPath string) bool {
+	return strings.HasPrefix(requestPath, "/healthz/") ||
+		strings.HasPrefix(requestPath, "/graphql/")
+}
+
+func isStaticAssetRequest(requestPath string) bool {
+	cleanPath := path.Clean("/" + requestPath)
+	if cleanPath == "/assets" || strings.HasPrefix(cleanPath, "/assets/") {
+		return true
+	}
+	return path.Dir(cleanPath) == "/" && path.Ext(cleanPath) != ""
+}
+
+func exactStaticFile(staticAssets fs.FS, requestPath string) (string, bool) {
+	cleanPath := path.Clean("/" + requestPath)
+	if cleanPath == "/" {
+		return "", false
+	}
+	name := strings.TrimPrefix(cleanPath, "/")
+	if !fs.ValidPath(name) {
+		return "", false
+	}
+	info, err := fs.Stat(staticAssets, name)
+	if err != nil || info.IsDir() {
+		return "", false
+	}
+	return name, true
+}
+
+func serveStaticPath(fileServer http.Handler, w http.ResponseWriter, r *http.Request, staticPath string) {
+	staticRequest := r.Clone(r.Context())
+	staticRequest.URL.Path = "/" + staticPath
+	staticRequest.URL.RawPath = ""
+	fileServer.ServeHTTP(w, staticRequest)
 }
 
 func generateToken() (string, error) {

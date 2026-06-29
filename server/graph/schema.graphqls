@@ -2,6 +2,99 @@ schema {
   query: Query
 }
 
+scalar Time
+
 type Query {
   health: String!
+  flows(statuses: [FlowStatus!]): [Flow!]!
+  flow(id: ID!): Flow
+}
+
+enum FlowStatus {
+  PENDING
+  IN_PROGRESS
+  NEEDS_ATTENTION
+  BLOCKED
+  COMPLETED
+  MERGED
+  ABANDONED
+}
+
+enum FlowPhaseStatus {
+  PENDING
+  READY
+  RUNNING
+  NEEDS_ATTENTION
+  COMPLETED
+  BLOCKED
+  SKIPPED
+}
+
+enum FlowPhaseStaleRunningStatus {
+  AWAITING_SESSION
+  SESSION_MISMATCH
+  MISSING_SESSION_ID
+}
+
+type Flow {
+  id: ID!
+  title: String!
+  instructions: String!
+  status: FlowStatus
+  statusRaw: String!
+  repoPath: String!
+  worktreePath: String!
+  branch: String!
+  baseRef: String!
+  commit: String!
+  planId: String!
+  planPath: String!
+  autoMode: Boolean!
+  createdAt: Time!
+  updatedAt: Time!
+  pr: PullRequest!
+  merge: Merge!
+  phases: [FlowPhase!]!
+  nextLaunchablePhase: FlowPhase
+}
+
+type FlowPhase {
+  phaseId: ID!
+  parentPhaseId: ID!
+  title: String!
+  kind: String!
+  status: FlowPhaseStatus
+  statusRaw: String!
+  order: Int!
+  outcome: String!
+  notes: String!
+  summary: String!
+  latestLaunchId: String
+  createdAt: Time!
+  updatedAt: Time!
+  allowedNextStatuses: [FlowPhaseStatus!]!
+  launchable: Boolean!
+  staleRunningStatus: FlowPhaseStaleRunningStatus
+  activeRuntimeJob: RuntimeJob
+}
+
+type PullRequest {
+  provider: String!
+  number: Int!
+  url: String!
+  headBranch: String!
+  baseBranch: String!
+  status: String!
+}
+
+type Merge {
+  status: String!
+  commit: String!
+  mergedAt: Time
+}
+
+type RuntimeJob {
+  id: ID!
+  phaseId: ID!
+  status: String!
 }
