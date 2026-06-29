@@ -155,13 +155,13 @@ func TestRun_UnknownCommandFarFromValidShowsUsageWithoutSuggestion(t *testing.T)
 	})
 }
 
-func TestRunServeBypassesConfigScanAndTUI(t *testing.T) {
+func TestRunServeLoadsConfigForStateRootButBypassesScanAndTUI(t *testing.T) {
 	called := false
 	var got serveOptions
+	configRoot := filepath.Join(t.TempDir(), "from-config")
 	err := run([]string{"wtui", "serve"}, runDeps{
 		loadConfig: func() (config.Config, error) {
-			t.Fatal("loadConfig should not run for serve")
-			return config.Config{}, nil
+			return config.Config{Sessions: config.SessionsConfig{Root: configRoot}}, nil
 		},
 		scan: func(scanner.ScanOptions) ([]scanner.Repo, error) {
 			t.Fatal("scan should not run for serve")
@@ -187,6 +187,49 @@ func TestRunServeBypassesConfigScanAndTUI(t *testing.T) {
 	if got.Listen != "127.0.0.1:0" {
 		t.Fatalf("serve listen = %q, want local default", got.Listen)
 	}
+	if got.StateRoot != configRoot {
+		t.Fatalf("serve state root = %q, want config root %q", got.StateRoot, configRoot)
+	}
+}
+
+func TestRunServeStateRootUsesFlowPlanSessionConfigPrecedence(t *testing.T) {
+	configRoot := filepath.Join(t.TempDir(), "from-config")
+	sessionRoot := filepath.Join(t.TempDir(), "from-session")
+	planRoot := filepath.Join(t.TempDir(), "from-plan")
+	flowRoot := filepath.Join(t.TempDir(), "from-flow")
+	for _, tt := range []struct {
+		name string
+		env  map[string]string
+		want string
+	}{
+		{name: "flow", env: map[string]string{"FLOWSTATE_FLOW_STATE_ROOT": flowRoot, "FLOWSTATE_PLAN_STATE_ROOT": planRoot, "FLOWSTATE_SESSION_STATE_ROOT": sessionRoot}, want: flowRoot},
+		{name: "plan", env: map[string]string{"FLOWSTATE_PLAN_STATE_ROOT": planRoot, "FLOWSTATE_SESSION_STATE_ROOT": sessionRoot}, want: planRoot},
+		{name: "session", env: map[string]string{"FLOWSTATE_SESSION_STATE_ROOT": sessionRoot}, want: sessionRoot},
+		{name: "config", env: map[string]string{}, want: configRoot},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var got serveOptions
+			err := run([]string{"wtui", "serve"}, runDeps{
+				loadConfig: func() (config.Config, error) {
+					return config.Config{Sessions: config.SessionsConfig{Root: configRoot}}, nil
+				},
+				getenv: func(key string) string {
+					return tt.env[key]
+				},
+				serve: func(_ context.Context, opts serveOptions) error {
+					got = opts
+					return nil
+				},
+				stdout: &bytes.Buffer{},
+			})
+			if err != nil {
+				t.Fatalf("run returned error: %v", err)
+			}
+			if got.StateRoot != tt.want {
+				t.Fatalf("serve state root = %q, want %q", got.StateRoot, tt.want)
+			}
+		})
+	}
 }
 
 func TestRunServeAcceptsOnlyExplicitLoopbackListenAddresses(t *testing.T) {
@@ -194,6 +237,9 @@ func TestRunServeAcceptsOnlyExplicitLoopbackListenAddresses(t *testing.T) {
 		t.Run("accepts "+listen, func(t *testing.T) {
 			called := false
 			err := run([]string{"wtui", "serve", "--listen", listen}, runDeps{
+				loadConfig: func() (config.Config, error) {
+					return config.Config{Sessions: config.SessionsConfig{Root: t.TempDir()}}, nil
+				},
 				serve: func(_ context.Context, opts serveOptions) error {
 					called = true
 					if opts.Listen != listen {
@@ -245,6 +291,10 @@ func TestRunServeAcceptsOnlyExplicitLoopbackListenAddresses(t *testing.T) {
 func TestRunServeHelpBypassesServer(t *testing.T) {
 	var stdout bytes.Buffer
 	err := run([]string{"wtui", "serve", "--help"}, runDeps{
+		loadConfig: func() (config.Config, error) {
+			t.Fatal("loadConfig should not run for serve --help")
+			return config.Config{}, nil
+		},
 		serve: func(context.Context, serveOptions) error {
 			t.Fatal("serve dependency should not run for serve --help")
 			return nil
@@ -264,6 +314,10 @@ func TestRunServeHelpBypassesServer(t *testing.T) {
 func TestRunServeHelpAfterFlagsBypassesServer(t *testing.T) {
 	var stdout bytes.Buffer
 	err := run([]string{"wtui", "serve", "--listen", "127.0.0.1:0", "--help"}, runDeps{
+		loadConfig: func() (config.Config, error) {
+			t.Fatal("loadConfig should not run for serve --help")
+			return config.Config{}, nil
+		},
 		serve: func(context.Context, serveOptions) error {
 			t.Fatal("serve dependency should not run for serve --help")
 			return nil

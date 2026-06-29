@@ -367,9 +367,10 @@ func TestRunGeneratesTokenReportsURLAndStopsOnCancel(t *testing.T) {
 
 	go func() {
 		done <- server.Run(ctx, server.Options{
-			Listen:  "127.0.0.1:0",
-			Stdout:  &stdout,
-			Started: started,
+			Listen:    "127.0.0.1:0",
+			StateRoot: t.TempDir(),
+			Stdout:    &stdout,
+			Started:   started,
 		})
 	}()
 
@@ -405,9 +406,10 @@ func TestRunServesHTTPWithReportedURLAndToken(t *testing.T) {
 
 	go func() {
 		done <- server.Run(ctx, server.Options{
-			Listen:  "127.0.0.1:0",
-			Stdout:  io.Discard,
-			Started: started,
+			Listen:    "127.0.0.1:0",
+			StateRoot: t.TempDir(),
+			Stdout:    io.Discard,
+			Started:   started,
 		})
 	}()
 	t.Cleanup(func() {
