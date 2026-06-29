@@ -14,6 +14,7 @@ type Query {
 type Mutation {
   launchFlowPhase(input: LaunchFlowPhaseInput!): LaunchFlowPhasePayload!
   cancelRuntimeJob(id: ID!): RuntimeJob!
+  setFlowPhaseStatus(input: SetFlowPhaseStatusInput!): SetFlowPhaseStatusPayload!
 }
 
 input LaunchFlowPhaseInput {
@@ -30,6 +31,20 @@ type LaunchFlowPhasePayload {
   job: RuntimeJob!
 }
 
+input SetFlowPhaseStatusInput {
+  flowId: ID!
+  phaseId: ID!
+  status: FlowPhaseStatusInput!
+  outcome: String
+  notes: String
+  summary: String
+}
+
+type SetFlowPhaseStatusPayload {
+  flow: Flow!
+  phase: FlowPhase!
+}
+
 enum FlowStatus {
   PENDING
   IN_PROGRESS
@@ -43,6 +58,14 @@ enum FlowStatus {
 enum FlowPhaseStatus {
   PENDING
   READY
+  RUNNING
+  NEEDS_ATTENTION
+  COMPLETED
+  BLOCKED
+  SKIPPED
+}
+
+enum FlowPhaseStatusInput {
   RUNNING
   NEEDS_ATTENTION
   COMPLETED

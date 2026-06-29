@@ -14,6 +14,7 @@ import (
 
 	"github.com/brian-bell/flowstate/flowlaunch"
 	"github.com/brian-bell/flowstate/flowstore"
+	"github.com/brian-bell/flowstate/internal/artifacts"
 	"github.com/brian-bell/flowstate/planstore"
 	"github.com/brian-bell/flowstate/server/flowquery"
 	"github.com/brian-bell/flowstate/server/graph/generated"
@@ -138,6 +139,45 @@ func (r *mutationResolver) CancelRuntimeJob(ctx context.Context, id string) (*mo
 	return runtimeJobSnapshotToGraphQL(snapshot), nil
 }
 
+// SetFlowPhaseStatus is the resolver for the setFlowPhaseStatus field.
+func (r *mutationResolver) SetFlowPhaseStatus(ctx context.Context, input model.SetFlowPhaseStatusInput) (*model.SetFlowPhaseStatusPayload, error) {
+	if r.FlowStore == nil {
+		return nil, fmt.Errorf("flow store is not configured")
+	}
+	update := flowstore.PhaseUpdate{
+		FlowID:  input.FlowID,
+		PhaseID: input.PhaseID,
+		Status:  flowPhaseStatusInputToStore(input.Status),
+	}
+	if input.Outcome != nil {
+		update.Outcome = *input.Outcome
+	}
+	if input.Notes != nil {
+		update.Notes = *input.Notes
+	}
+	if input.Summary != nil {
+		update.Summary = *input.Summary
+	}
+	record, err := r.FlowStore.SetPhase(update)
+	if err != nil {
+		return nil, fmt.Errorf("set flow phase status %q/%q: %w", input.FlowID, input.PhaseID, err)
+	}
+	view, err := flowquery.BuildWithRuntime(record, r.RuntimeJobs)
+	if err != nil {
+		view = flowquery.Build(record)
+	}
+	phaseID := artifacts.NormalizePhaseID(input.PhaseID)
+	for _, phase := range view.Phases {
+		if artifacts.NormalizePhaseID(phase.PhaseID) == phaseID {
+			return &model.SetFlowPhaseStatusPayload{
+				Flow:  flowToGraphQL(view),
+				Phase: phaseToGraphQL(phase),
+			}, nil
+		}
+	}
+	return nil, fmt.Errorf("set flow phase status %q/%q: updated phase not found", input.FlowID, input.PhaseID)
+}
+
 // Health is the resolver for the health field.
 func (r *queryResolver) Health(ctx context.Context) (string, error) {
 	return "ok", nil
@@ -146,7 +186,7 @@ func (r *queryResolver) Health(ctx context.Context) (string, error) {
 // Flows is the resolver for the flows field.
 func (r *queryResolver) Flows(ctx context.Context, statuses []model.FlowStatus) ([]*model.Flow, error) {
 	if r.FlowStore == nil {
-		return nil, fmt.Errorf("flow reader is not configured")
+		return nil, fmt.Errorf("flow store is not configured")
 	}
 	records, err := r.FlowStore.List(flowstore.FlowFilter{})
 	if err != nil {
@@ -173,7 +213,7 @@ func (r *queryResolver) Flows(ctx context.Context, statuses []model.FlowStatus) 
 // Flow is the resolver for the flow field.
 func (r *queryResolver) Flow(ctx context.Context, id string) (*model.Flow, error) {
 	if r.FlowStore == nil {
-		return nil, fmt.Errorf("flow reader is not configured")
+		return nil, fmt.Errorf("flow store is not configured")
 	}
 	record, err := r.FlowStore.Read(id)
 	if err != nil {

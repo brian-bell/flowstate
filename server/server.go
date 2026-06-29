@@ -305,6 +305,9 @@ func staticAssetOptions(opts HandlerOptions) (fs.FS, string, error) {
 }
 
 func resolveRuntimeOptions(runtimeJobs flowquery.RuntimeJobLookup, runtimeStarter graph.RuntimeStarter, runtimeController graph.RuntimeController) (flowquery.RuntimeJobLookup, graph.RuntimeStarter, graph.RuntimeController, error) {
+	if runtimeStarter == nil && runtimeController == nil {
+		return runtimeJobs, nil, nil, nil
+	}
 	provider, ok := singleRuntimeProvider(runtimeJobs, runtimeStarter, runtimeController)
 	if !ok {
 		return nil, nil, nil, fmt.Errorf("runtime job options must use one provider for lookup, starter, and controller")
