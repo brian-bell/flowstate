@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"os"
 	"os/exec"
@@ -71,6 +72,7 @@ func TestRun_HelpBypassesConfigAndScan(t *testing.T) {
 		"Usage: flowstate [--version] [command]",
 		"flowstate plan --help",
 		"flowstate flow --help",
+		"flowstate serve --listen 127.0.0.1:0",
 		"flowstate session-hook --provider codex",
 	})
 }
@@ -100,6 +102,31 @@ func TestRun_UnknownCommandSuggestsNearbyCommand(t *testing.T) {
 	})
 }
 
+func TestRun_UnknownCommandSuggestsServe(t *testing.T) {
+	err := run([]string{"wtui", "serbe"}, runDeps{
+		loadConfig: func() (config.Config, error) {
+			t.Fatal("loadConfig should not run for unknown command")
+			return config.Config{}, nil
+		},
+		scan: func(scanner.ScanOptions) ([]scanner.Repo, error) {
+			t.Fatal("scan should not run for unknown command")
+			return nil, nil
+		},
+		serve: func(context.Context, serveOptions) error {
+			t.Fatal("serve should not run for unknown command")
+			return nil
+		},
+		stdout: &bytes.Buffer{},
+	})
+	if err == nil {
+		t.Fatal("expected unknown command error")
+	}
+	requireContainsAll(t, err.Error(), []string{
+		`unknown command "serbe"; did you mean "serve"?`,
+		"Usage: flowstate [--version] [command]",
+	})
+}
+
 func TestRun_UnknownCommandFarFromValidShowsUsageWithoutSuggestion(t *testing.T) {
 	err := run([]string{"wtui", "definitely-not-close"}, runDeps{
 		loadConfig: func() (config.Config, error) {
@@ -125,6 +152,131 @@ func TestRun_UnknownCommandFarFromValidShowsUsageWithoutSuggestion(t *testing.T)
 	requireContainsAll(t, err.Error(), []string{
 		`unknown command "definitely-not-close"`,
 		"Usage: flowstate [--version] [command]",
+	})
+}
+
+func TestRunServeBypassesConfigScanAndTUI(t *testing.T) {
+	called := false
+	var got serveOptions
+	err := run([]string{"wtui", "serve"}, runDeps{
+		loadConfig: func() (config.Config, error) {
+			t.Fatal("loadConfig should not run for serve")
+			return config.Config{}, nil
+		},
+		scan: func(scanner.ScanOptions) ([]scanner.Repo, error) {
+			t.Fatal("scan should not run for serve")
+			return nil, nil
+		},
+		startProgram: func([]scanner.Repo, config.Config) error {
+			t.Fatal("program should not start for serve")
+			return nil
+		},
+		serve: func(_ context.Context, opts serveOptions) error {
+			called = true
+			got = opts
+			return nil
+		},
+		stdout: &bytes.Buffer{},
+	})
+	if err != nil {
+		t.Fatalf("run returned error: %v", err)
+	}
+	if !called {
+		t.Fatal("serve dependency was not called")
+	}
+	if got.Listen != "127.0.0.1:0" {
+		t.Fatalf("serve listen = %q, want local default", got.Listen)
+	}
+}
+
+func TestRunServeAcceptsOnlyExplicitLoopbackListenAddresses(t *testing.T) {
+	for _, listen := range []string{"localhost:8080", "127.0.0.1:0", "[::1]:8080"} {
+		t.Run("accepts "+listen, func(t *testing.T) {
+			called := false
+			err := run([]string{"wtui", "serve", "--listen", listen}, runDeps{
+				serve: func(_ context.Context, opts serveOptions) error {
+					called = true
+					if opts.Listen != listen {
+						t.Fatalf("listen = %q, want %q", opts.Listen, listen)
+					}
+					return nil
+				},
+				stdout: &bytes.Buffer{},
+			})
+			if err != nil {
+				t.Fatalf("run returned error: %v", err)
+			}
+			if !called {
+				t.Fatal("serve dependency was not called")
+			}
+		})
+	}
+
+	rejected := []string{
+		"0.0.0.0:8080",
+		":8080",
+		"[::]:8080",
+		"192.168.1.20:8080",
+		"example.com:8080",
+		"localhost.:8080",
+		"[::ffff:127.0.0.1]:8080",
+		"127.1:8080",
+		"[fe80::1%lo0]:8080",
+	}
+	for _, listen := range rejected {
+		t.Run("rejects "+listen, func(t *testing.T) {
+			err := run([]string{"wtui", "serve", "--listen", listen}, runDeps{
+				serve: func(context.Context, serveOptions) error {
+					t.Fatal("serve dependency should not run for invalid listen address")
+					return nil
+				},
+				stdout: &bytes.Buffer{},
+			})
+			if err == nil {
+				t.Fatal("expected listen validation error")
+			}
+			if !strings.Contains(err.Error(), "listen address must be host:port with host localhost or a loopback IP") {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestRunServeHelpBypassesServer(t *testing.T) {
+	var stdout bytes.Buffer
+	err := run([]string{"wtui", "serve", "--help"}, runDeps{
+		serve: func(context.Context, serveOptions) error {
+			t.Fatal("serve dependency should not run for serve --help")
+			return nil
+		},
+		stdout: &stdout,
+	})
+	if err != nil {
+		t.Fatalf("run returned error: %v", err)
+	}
+	requireContainsAll(t, stdout.String(), []string{
+		"Usage: flowstate serve [--listen host:port]",
+		"--listen",
+		"127.0.0.1:0",
+	})
+}
+
+func TestRunServeHelpAfterFlagsBypassesServer(t *testing.T) {
+	var stdout bytes.Buffer
+	err := run([]string{"wtui", "serve", "--listen", "127.0.0.1:0", "--help"}, runDeps{
+		serve: func(context.Context, serveOptions) error {
+			t.Fatal("serve dependency should not run for serve --help")
+			return nil
+		},
+		stdout: &stdout,
+	})
+	if err != nil {
+		t.Fatalf("run returned error: %v", err)
+	}
+	requireContainsAll(t, stdout.String(), []string{
+		"Usage: flowstate serve [--listen host:port]",
+		"--listen",
+		"127.0.0.1:0",
 	})
 }
 
