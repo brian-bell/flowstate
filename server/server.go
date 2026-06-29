@@ -212,10 +212,10 @@ func isReservedAPIPath(requestPath string) bool {
 
 func isStaticAssetRequest(requestPath string) bool {
 	cleanPath := path.Clean("/" + requestPath)
-	if strings.HasPrefix(cleanPath, "/assets/") {
+	if cleanPath == "/assets" || strings.HasPrefix(cleanPath, "/assets/") {
 		return true
 	}
-	return path.Ext(cleanPath) != ""
+	return path.Dir(cleanPath) == "/" && path.Ext(cleanPath) != ""
 }
 
 func exactStaticFile(staticAssets fs.FS, requestPath string) (string, bool) {

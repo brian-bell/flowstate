@@ -38,6 +38,8 @@ func TestHandlerServesStaticSPAShellAndAssets(t *testing.T) {
 		{name: "head root shell", method: http.MethodHead, path: "/", wantStatus: http.StatusOK},
 		{name: "concrete asset", method: http.MethodGet, path: "/assets/app.js", wantStatus: http.StatusOK, wantBody: `console.log("flowstate")`},
 		{name: "client route fallback", method: http.MethodGet, path: "/flows/placeholder", wantStatus: http.StatusOK, wantBody: testSPAShell},
+		{name: "dotted flow route fallback", method: http.MethodGet, path: "/flows/a.b_c-2", wantStatus: http.StatusOK, wantBody: testSPAShell},
+		{name: "dotted plan route fallback", method: http.MethodGet, path: "/plans/a.b", wantStatus: http.StatusOK, wantBody: testSPAShell},
 		{name: "missing asset", method: http.MethodGet, path: "/assets/missing.js", wantStatus: http.StatusNotFound, wantBody: "404 page not found\n"},
 		{name: "missing file extension", method: http.MethodGet, path: "/favicon.ico", wantStatus: http.StatusNotFound, wantBody: "404 page not found\n"},
 		{name: "post client route", method: http.MethodPost, path: "/flows/placeholder", wantStatus: http.StatusMethodNotAllowed, wantBody: "method not allowed\n", wantAllow: "GET, HEAD"},
