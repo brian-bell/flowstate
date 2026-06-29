@@ -19,6 +19,8 @@ import (
 
 	"github.com/99designs/gqlgen/graphql/handler"
 	"github.com/99designs/gqlgen/graphql/handler/transport"
+	"github.com/brian-bell/flowstate/flowstore"
+	"github.com/brian-bell/flowstate/server/flowquery"
 	"github.com/brian-bell/flowstate/server/graph"
 	"github.com/brian-bell/flowstate/server/graph/generated"
 )
@@ -31,13 +33,22 @@ type HandlerOptions struct {
 	ListenerHost   string
 	ListenerPort   string
 	AllowIPv6Alias bool
+	FlowReader     FlowReader
+	RuntimeJobs    flowquery.RuntimeJobLookup
 }
 
 type Options struct {
-	Listen  string
-	Token   string
-	Stdout  io.Writer
-	Started chan<- Started
+	Listen      string
+	Token       string
+	StateRoot   string
+	RuntimeJobs flowquery.RuntimeJobLookup
+	Stdout      io.Writer
+	Started     chan<- Started
+}
+
+type FlowReader interface {
+	List(flowstore.FlowFilter) ([]flowstore.FlowRecord, error)
+	Read(string) (flowstore.FlowRecord, error)
 }
 
 type Started struct {
@@ -61,6 +72,10 @@ func Run(ctx context.Context, opts Options) error {
 		}
 		token = generated
 	}
+	flowReader, err := flowstore.NewStore(flowstore.StoreOptions{Root: opts.StateRoot})
+	if err != nil {
+		return err
+	}
 
 	listener, err := net.Listen("tcp", listen)
 	if err != nil {
@@ -77,6 +92,8 @@ func Run(ctx context.Context, opts Options) error {
 		ListenerHost:   listenerHost,
 		ListenerPort:   listenerPort,
 		AllowIPv6Alias: listenerHost == "::1",
+		FlowReader:     flowReader,
+		RuntimeJobs:    opts.RuntimeJobs,
 	})
 	if err != nil {
 		return err
@@ -143,7 +160,10 @@ func NewHandler(opts HandlerOptions) (http.Handler, error) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(schemaGraphQL))
 	})
-	graphqlHandler := handler.New(generated.NewExecutableSchema(generated.Config{Resolvers: &graph.Resolver{}}))
+	graphqlHandler := handler.New(generated.NewExecutableSchema(generated.Config{Resolvers: &graph.Resolver{
+		FlowReader:  opts.FlowReader,
+		RuntimeJobs: opts.RuntimeJobs,
+	}}))
 	graphqlHandler.AddTransport(transport.POST{})
 	mux.Handle("/graphql", requireBearerToken(opts.Token, graphqlHandler))
 	return requireAllowedHost(opts, requireAllowedOrigin(opts, mux)), nil

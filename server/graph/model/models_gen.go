@@ -2,5 +2,263 @@
 
 package model
 
+import (
+	"bytes"
+	"fmt"
+	"io"
+	"strconv"
+	"time"
+)
+
+type Flow struct {
+	ID                  string       `json:"id"`
+	Title               string       `json:"title"`
+	Instructions        string       `json:"instructions"`
+	Status              *FlowStatus  `json:"status,omitempty"`
+	StatusRaw           string       `json:"statusRaw"`
+	RepoPath            string       `json:"repoPath"`
+	WorktreePath        string       `json:"worktreePath"`
+	Branch              string       `json:"branch"`
+	BaseRef             string       `json:"baseRef"`
+	Commit              string       `json:"commit"`
+	PlanID              string       `json:"planId"`
+	PlanPath            string       `json:"planPath"`
+	AutoMode            bool         `json:"autoMode"`
+	CreatedAt           time.Time    `json:"createdAt"`
+	UpdatedAt           time.Time    `json:"updatedAt"`
+	Pr                  *PullRequest `json:"pr"`
+	Merge               *Merge       `json:"merge"`
+	Phases              []*FlowPhase `json:"phases"`
+	NextLaunchablePhase *FlowPhase   `json:"nextLaunchablePhase,omitempty"`
+}
+
+type FlowPhase struct {
+	PhaseID             string                       `json:"phaseId"`
+	ParentPhaseID       string                       `json:"parentPhaseId"`
+	Title               string                       `json:"title"`
+	Kind                string                       `json:"kind"`
+	Status              *FlowPhaseStatus             `json:"status,omitempty"`
+	StatusRaw           string                       `json:"statusRaw"`
+	Order               int                          `json:"order"`
+	Outcome             string                       `json:"outcome"`
+	Notes               string                       `json:"notes"`
+	Summary             string                       `json:"summary"`
+	LatestLaunchID      *string                      `json:"latestLaunchId,omitempty"`
+	CreatedAt           time.Time                    `json:"createdAt"`
+	UpdatedAt           time.Time                    `json:"updatedAt"`
+	AllowedNextStatuses []FlowPhaseStatus            `json:"allowedNextStatuses"`
+	Launchable          bool                         `json:"launchable"`
+	StaleRunningStatus  *FlowPhaseStaleRunningStatus `json:"staleRunningStatus,omitempty"`
+	ActiveRuntimeJob    *RuntimeJob                  `json:"activeRuntimeJob,omitempty"`
+}
+
+type Merge struct {
+	Status   string     `json:"status"`
+	Commit   string     `json:"commit"`
+	MergedAt *time.Time `json:"mergedAt,omitempty"`
+}
+
+type PullRequest struct {
+	Provider   string `json:"provider"`
+	Number     int    `json:"number"`
+	URL        string `json:"url"`
+	HeadBranch string `json:"headBranch"`
+	BaseBranch string `json:"baseBranch"`
+	Status     string `json:"status"`
+}
+
 type Query struct {
+}
+
+type RuntimeJob struct {
+	ID      string `json:"id"`
+	PhaseID string `json:"phaseId"`
+	Status  string `json:"status"`
+}
+
+type FlowPhaseStaleRunningStatus string
+
+const (
+	FlowPhaseStaleRunningStatusAwaitingSession  FlowPhaseStaleRunningStatus = "AWAITING_SESSION"
+	FlowPhaseStaleRunningStatusSessionMismatch  FlowPhaseStaleRunningStatus = "SESSION_MISMATCH"
+	FlowPhaseStaleRunningStatusMissingSessionID FlowPhaseStaleRunningStatus = "MISSING_SESSION_ID"
+)
+
+var AllFlowPhaseStaleRunningStatus = []FlowPhaseStaleRunningStatus{
+	FlowPhaseStaleRunningStatusAwaitingSession,
+	FlowPhaseStaleRunningStatusSessionMismatch,
+	FlowPhaseStaleRunningStatusMissingSessionID,
+}
+
+func (e FlowPhaseStaleRunningStatus) IsValid() bool {
+	switch e {
+	case FlowPhaseStaleRunningStatusAwaitingSession, FlowPhaseStaleRunningStatusSessionMismatch, FlowPhaseStaleRunningStatusMissingSessionID:
+		return true
+	}
+	return false
+}
+
+func (e FlowPhaseStaleRunningStatus) String() string {
+	return string(e)
+}
+
+func (e *FlowPhaseStaleRunningStatus) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = FlowPhaseStaleRunningStatus(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid FlowPhaseStaleRunningStatus", str)
+	}
+	return nil
+}
+
+func (e FlowPhaseStaleRunningStatus) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *FlowPhaseStaleRunningStatus) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e FlowPhaseStaleRunningStatus) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type FlowPhaseStatus string
+
+const (
+	FlowPhaseStatusPending        FlowPhaseStatus = "PENDING"
+	FlowPhaseStatusReady          FlowPhaseStatus = "READY"
+	FlowPhaseStatusRunning        FlowPhaseStatus = "RUNNING"
+	FlowPhaseStatusNeedsAttention FlowPhaseStatus = "NEEDS_ATTENTION"
+	FlowPhaseStatusCompleted      FlowPhaseStatus = "COMPLETED"
+	FlowPhaseStatusBlocked        FlowPhaseStatus = "BLOCKED"
+	FlowPhaseStatusSkipped        FlowPhaseStatus = "SKIPPED"
+)
+
+var AllFlowPhaseStatus = []FlowPhaseStatus{
+	FlowPhaseStatusPending,
+	FlowPhaseStatusReady,
+	FlowPhaseStatusRunning,
+	FlowPhaseStatusNeedsAttention,
+	FlowPhaseStatusCompleted,
+	FlowPhaseStatusBlocked,
+	FlowPhaseStatusSkipped,
+}
+
+func (e FlowPhaseStatus) IsValid() bool {
+	switch e {
+	case FlowPhaseStatusPending, FlowPhaseStatusReady, FlowPhaseStatusRunning, FlowPhaseStatusNeedsAttention, FlowPhaseStatusCompleted, FlowPhaseStatusBlocked, FlowPhaseStatusSkipped:
+		return true
+	}
+	return false
+}
+
+func (e FlowPhaseStatus) String() string {
+	return string(e)
+}
+
+func (e *FlowPhaseStatus) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = FlowPhaseStatus(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid FlowPhaseStatus", str)
+	}
+	return nil
+}
+
+func (e FlowPhaseStatus) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *FlowPhaseStatus) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e FlowPhaseStatus) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type FlowStatus string
+
+const (
+	FlowStatusPending        FlowStatus = "PENDING"
+	FlowStatusInProgress     FlowStatus = "IN_PROGRESS"
+	FlowStatusNeedsAttention FlowStatus = "NEEDS_ATTENTION"
+	FlowStatusBlocked        FlowStatus = "BLOCKED"
+	FlowStatusCompleted      FlowStatus = "COMPLETED"
+	FlowStatusMerged         FlowStatus = "MERGED"
+	FlowStatusAbandoned      FlowStatus = "ABANDONED"
+)
+
+var AllFlowStatus = []FlowStatus{
+	FlowStatusPending,
+	FlowStatusInProgress,
+	FlowStatusNeedsAttention,
+	FlowStatusBlocked,
+	FlowStatusCompleted,
+	FlowStatusMerged,
+	FlowStatusAbandoned,
+}
+
+func (e FlowStatus) IsValid() bool {
+	switch e {
+	case FlowStatusPending, FlowStatusInProgress, FlowStatusNeedsAttention, FlowStatusBlocked, FlowStatusCompleted, FlowStatusMerged, FlowStatusAbandoned:
+		return true
+	}
+	return false
+}
+
+func (e FlowStatus) String() string {
+	return string(e)
+}
+
+func (e *FlowStatus) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = FlowStatus(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid FlowStatus", str)
+	}
+	return nil
+}
+
+func (e FlowStatus) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *FlowStatus) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e FlowStatus) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
 }
