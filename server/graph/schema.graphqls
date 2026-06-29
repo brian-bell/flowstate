@@ -1,5 +1,6 @@
 schema {
   query: Query
+  mutation: Mutation
 }
 
 scalar Time
@@ -8,6 +9,24 @@ type Query {
   health: String!
   flows(statuses: [FlowStatus!]): [Flow!]!
   flow(id: ID!): Flow
+}
+
+type Mutation {
+  setFlowPhaseStatus(input: SetFlowPhaseStatusInput!): SetFlowPhaseStatusPayload!
+}
+
+input SetFlowPhaseStatusInput {
+  flowId: ID!
+  phaseId: ID!
+  status: FlowPhaseStatus!
+  outcome: String
+  notes: String
+  summary: String
+}
+
+type SetFlowPhaseStatusPayload {
+  flow: Flow!
+  phase: FlowPhase!
 }
 
 enum FlowStatus {

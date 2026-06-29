@@ -58,6 +58,9 @@ type Merge struct {
 	MergedAt *time.Time `json:"mergedAt,omitempty"`
 }
 
+type Mutation struct {
+}
+
 type PullRequest struct {
 	Provider   string `json:"provider"`
 	Number     int    `json:"number"`
@@ -74,6 +77,20 @@ type RuntimeJob struct {
 	ID      string `json:"id"`
 	PhaseID string `json:"phaseId"`
 	Status  string `json:"status"`
+}
+
+type SetFlowPhaseStatusInput struct {
+	FlowID  string          `json:"flowId"`
+	PhaseID string          `json:"phaseId"`
+	Status  FlowPhaseStatus `json:"status"`
+	Outcome *string         `json:"outcome,omitempty"`
+	Notes   *string         `json:"notes,omitempty"`
+	Summary *string         `json:"summary,omitempty"`
+}
+
+type SetFlowPhaseStatusPayload struct {
+	Flow  *Flow      `json:"flow"`
+	Phase *FlowPhase `json:"phase"`
 }
 
 type FlowPhaseStaleRunningStatus string

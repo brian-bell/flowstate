@@ -7,12 +7,13 @@ import (
 	"github.com/brian-bell/flowstate/server/flowquery"
 )
 
-type FlowReader interface {
+type FlowStore interface {
 	List(flowstore.FlowFilter) ([]flowstore.FlowRecord, error)
 	Read(string) (flowstore.FlowRecord, error)
+	SetPhase(flowstore.PhaseUpdate) (flowstore.FlowRecord, error)
 }
 
 type Resolver struct {
-	FlowReader  FlowReader
+	FlowStore   FlowStore
 	RuntimeJobs flowquery.RuntimeJobLookup
 }
