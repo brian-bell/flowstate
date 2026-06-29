@@ -21,7 +21,9 @@ import (
 
 	"github.com/99designs/gqlgen/graphql/handler"
 	"github.com/99designs/gqlgen/graphql/handler/transport"
+	"github.com/brian-bell/flowstate/actions"
 	"github.com/brian-bell/flowstate/flowstore"
+	"github.com/brian-bell/flowstate/server/flowcreate"
 	"github.com/brian-bell/flowstate/server/flowquery"
 	"github.com/brian-bell/flowstate/server/graph"
 	"github.com/brian-bell/flowstate/server/graph/generated"
@@ -40,18 +42,21 @@ type HandlerOptions struct {
 	Scope          ListenerScope
 	AllowIPv6Alias bool
 	FlowStore      FlowStore
+	FlowCreator    FlowCreator
 	RuntimeJobs    flowquery.RuntimeJobLookup
 	StaticAssets   fs.FS
 	SPAShell       string
 }
 
 type Options struct {
-	Listen      string
-	Token       string
-	StateRoot   string
-	RuntimeJobs flowquery.RuntimeJobLookup
-	Stdout      io.Writer
-	Started     chan<- Started
+	Listen               string
+	Token                string
+	StateRoot            string
+	RuntimeJobs          flowquery.RuntimeJobLookup
+	BootstrapHookForRepo func(string) (actions.BootstrapHook, bool)
+	RunBootstrapHook     func(actions.BootstrapContext, actions.BootstrapHook) error
+	Stdout               io.Writer
+	Started              chan<- Started
 
 	resolve ListenResolveOptions
 	listen  func(network string, address string) (net.Listener, error)
@@ -62,6 +67,8 @@ type FlowStore interface {
 	Read(string) (flowstore.FlowRecord, error)
 	SetPhase(flowstore.PhaseUpdate) (flowstore.FlowRecord, error)
 }
+
+type FlowCreator = graph.FlowCreator
 
 type Started struct {
 	URL   string
@@ -85,6 +92,11 @@ func Run(ctx context.Context, opts Options) error {
 	if err != nil {
 		return err
 	}
+	flowCreator := flowcreate.New(flowcreate.Options{
+		Store:                flowStore,
+		BootstrapHookForRepo: opts.BootstrapHookForRepo,
+		RunBootstrapHook:     opts.RunBootstrapHook,
+	})
 
 	listen := net.Listen
 	if opts.listen != nil {
@@ -107,6 +119,7 @@ func Run(ctx context.Context, opts Options) error {
 		Scope:          resolvedListen.Scope,
 		AllowIPv6Alias: resolvedListen.Scope == ListenerScopeLoopback && listenerHost == "::1",
 		FlowStore:      flowStore,
+		FlowCreator:    flowCreator,
 		RuntimeJobs:    opts.RuntimeJobs,
 	})
 	if err != nil {
@@ -180,6 +193,7 @@ func NewHandler(opts HandlerOptions) (http.Handler, error) {
 	})
 	graphqlHandler := handler.New(generated.NewExecutableSchema(generated.Config{Resolvers: &graph.Resolver{
 		FlowStore:   opts.FlowStore,
+		FlowCreator: opts.FlowCreator,
 		RuntimeJobs: opts.RuntimeJobs,
 	}}))
 	graphqlHandler.AddTransport(transport.POST{})

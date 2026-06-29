@@ -17,6 +17,31 @@ import (
 	"github.com/brian-bell/flowstate/server/graph/model"
 )
 
+// CreateFlow is the resolver for the createFlow field.
+func (r *mutationResolver) CreateFlow(ctx context.Context, input model.CreateFlowInput) (*model.Flow, error) {
+	if r.FlowCreator == nil {
+		return nil, fmt.Errorf("flow creator is not configured")
+	}
+	baseRef := ""
+	if input.BaseRef != nil {
+		baseRef = *input.BaseRef
+	}
+	record, err := r.FlowCreator.CreateFlow(ctx, CreateFlowInput{
+		RepoPath:     input.RepoPath,
+		Title:        input.Title,
+		Instructions: input.Instructions,
+		BaseRef:      baseRef,
+	})
+	if err != nil {
+		return nil, err
+	}
+	view, err := flowquery.BuildWithRuntime(record, r.RuntimeJobs)
+	if err != nil {
+		return nil, err
+	}
+	return flowToGraphQL(view), nil
+}
+
 // SetFlowPhaseStatus is the resolver for the setFlowPhaseStatus field.
 func (r *mutationResolver) SetFlowPhaseStatus(ctx context.Context, input model.SetFlowPhaseStatusInput) (*model.SetFlowPhaseStatusPayload, error) {
 	if r.FlowStore == nil {

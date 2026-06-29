@@ -192,6 +192,54 @@ func TestRunServeLoadsConfigForStateRootButBypassesScanAndTUI(t *testing.T) {
 	}
 }
 
+func TestRunServePassesBootstrapHookConfig(t *testing.T) {
+	var got serveOptions
+	repoPath := filepath.Join(t.TempDir(), "repo")
+	err := run([]string{"wtui", "serve"}, runDeps{
+		loadConfig: func() (config.Config, error) {
+			return config.Config{
+				Sessions: config.SessionsConfig{Root: filepath.Join(t.TempDir(), "state")},
+				Bootstrap: config.BootstrapConfig{
+					TimeoutSeconds: 90,
+					Hooks: []config.BootstrapHookConfig{{
+						RepoPath: repoPath,
+						Script:   ".flowstate/bootstrap",
+					}},
+				},
+			}, nil
+		},
+		scan: func(scanner.ScanOptions) ([]scanner.Repo, error) {
+			t.Fatal("scan should not run for serve")
+			return nil, nil
+		},
+		startProgram: func([]scanner.Repo, config.Config) error {
+			t.Fatal("program should not start for serve")
+			return nil
+		},
+		serve: func(_ context.Context, opts serveOptions) error {
+			got = opts
+			return nil
+		},
+		stdout: &bytes.Buffer{},
+	})
+	if err != nil {
+		t.Fatalf("run returned error: %v", err)
+	}
+	if got.BootstrapHookForRepo == nil {
+		t.Fatal("serve options missing bootstrap hook resolver")
+	}
+	hook, ok := got.BootstrapHookForRepo(repoPath)
+	if !ok {
+		t.Fatal("serve bootstrap resolver did not match configured repo")
+	}
+	if hook.Script != ".flowstate/bootstrap" || hook.TimeoutSeconds != 90 {
+		t.Fatalf("hook = %#v", hook)
+	}
+	if got.RunBootstrapHook == nil {
+		t.Fatal("serve options missing bootstrap runner")
+	}
+}
+
 func TestRunServeStateRootUsesFlowPlanSessionConfigPrecedence(t *testing.T) {
 	configRoot := filepath.Join(t.TempDir(), "from-config")
 	sessionRoot := filepath.Join(t.TempDir(), "from-session")
