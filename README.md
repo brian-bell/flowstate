@@ -60,6 +60,9 @@ cd flowstate
 make build
 ```
 
+Source builds require Go 1.26+, Node.js, and `pnpm` because the embedded web
+UI is built before the Go binary.
+
 The binary is built to `bin/flowstate`.
 
 ## Quickstart

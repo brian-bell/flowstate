@@ -13,6 +13,7 @@ type Query {
 
 type Mutation {
   launchFlowPhase(input: LaunchFlowPhaseInput!): LaunchFlowPhasePayload!
+  cancelRuntimeJob(id: ID!): RuntimeJob!
 }
 
 input LaunchFlowPhaseInput {

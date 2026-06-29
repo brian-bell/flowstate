@@ -25,6 +25,7 @@ const (
 	StatusRunning   Status = "running"
 	StatusSucceeded Status = "succeeded"
 	StatusFailed    Status = "failed"
+	StatusCanceled  Status = "canceled"
 )
 
 const (
@@ -70,6 +71,12 @@ type Snapshot struct {
 	LogTruncated     bool
 }
 
+type CancelResult struct {
+	Snapshot   Snapshot
+	Found      bool
+	Transition bool
+}
+
 type Registry struct {
 	mu           sync.RWMutex
 	jobs         map[string]*job
@@ -86,6 +93,7 @@ type Registry struct {
 type job struct {
 	snapshot Snapshot
 	tail     logTail
+	cancel   context.CancelFunc
 }
 
 func NewRegistry(opts Options) *Registry {
@@ -145,6 +153,7 @@ func (r *Registry) Start(ctx context.Context, req StartRequest) (Snapshot, error
 	}
 	id := fmt.Sprintf("job-%d", r.nextID.Add(1))
 	createdAt := r.now()
+	jobCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	j := &job{
 		snapshot: Snapshot{
 			ID:        id,
@@ -154,18 +163,21 @@ func (r *Registry) Start(ctx context.Context, req StartRequest) (Snapshot, error
 			Status:    StatusQueued,
 			CreatedAt: createdAt,
 		},
-		tail: logTail{maxBytes: r.maxLogBytes, maxLines: r.maxLogLines},
+		tail:   logTail{maxBytes: r.maxLogBytes, maxLines: r.maxLogLines},
+		cancel: cancel,
 	}
 	r.mu.Lock()
+	r.evictExpiredLocked(createdAt)
 	r.jobs[id] = j
 	initial := j.snapshot
 	r.mu.Unlock()
 
-	go r.run(ctx, id, req.Context)
+	go r.run(jobCtx, id, req.Context)
 	return initial, nil
 }
 
 func (r *Registry) Lookup(id string) (Snapshot, bool) {
+	r.EvictExpired()
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	j, ok := r.jobs[id]
@@ -175,7 +187,49 @@ func (r *Registry) Lookup(id string) (Snapshot, bool) {
 	return j.snapshot, true
 }
 
+func (r *Registry) Cancel(id string) CancelResult {
+	trimmed := strings.TrimSpace(id)
+	if trimmed == "" {
+		return CancelResult{}
+	}
+	now := r.now()
+	r.mu.Lock()
+	j, ok := r.jobs[trimmed]
+	if !ok {
+		r.mu.Unlock()
+		return CancelResult{}
+	}
+	if terminal(j.snapshot.Status) {
+		snapshot := j.snapshot
+		r.mu.Unlock()
+		return CancelResult{Snapshot: snapshot, Found: true}
+	}
+	j.snapshot.Status = StatusCanceled
+	j.snapshot.EndedAt = &now
+	j.snapshot.Error = "runtime job canceled"
+	cancel := j.cancel
+	snapshot := j.snapshot
+	r.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	return CancelResult{Snapshot: snapshot, Found: true, Transition: true}
+}
+
+func (r *Registry) CancelAll() {
+	r.mu.RLock()
+	ids := make([]string, 0, len(r.jobs))
+	for id := range r.jobs {
+		ids = append(ids, id)
+	}
+	r.mu.RUnlock()
+	for _, id := range ids {
+		r.Cancel(id)
+	}
+}
+
 func (r *Registry) ActiveRuntimeJob(record flowstore.FlowRecord, phase flowstore.FlowPhase) (*flowquery.RuntimeJob, error) {
+	r.EvictExpired()
 	phaseID := artifacts.NormalizePhaseID(phase.PhaseID)
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -204,6 +258,10 @@ func (r *Registry) EvictExpired() {
 	now := r.now()
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.evictExpiredLocked(now)
+}
+
+func (r *Registry) evictExpiredLocked(now time.Time) {
 	for id, j := range r.jobs {
 		snapshot := j.snapshot
 		if !terminal(snapshot.Status) || snapshot.EndedAt == nil {
@@ -270,13 +328,13 @@ func (r *Registry) setStatus(id string, status Status, startedAt *time.Time) {
 	}
 }
 
-func (r *Registry) finish(id string, status Status, exitCode *int, errText string) {
+func (r *Registry) finish(id string, status Status, exitCode *int, errText string) bool {
 	endedAt := r.now()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	j, ok := r.jobs[id]
 	if !ok || terminal(j.snapshot.Status) {
-		return
+		return false
 	}
 	j.snapshot.Status = status
 	j.snapshot.EndedAt = &endedAt
@@ -285,6 +343,7 @@ func (r *Registry) finish(id string, status Status, exitCode *int, errText strin
 		j.snapshot.ExitCode = &code
 	}
 	j.snapshot.Error = errText
+	return true
 }
 
 func (r *Registry) fail(id string, code *int, err error, launch actions.AgentLaunchContext) {
@@ -292,8 +351,8 @@ func (r *Registry) fail(id string, code *int, err error, launch actions.AgentLau
 	if err != nil {
 		errText = err.Error()
 	}
-	r.finish(id, StatusFailed, code, errText)
-	if !launch.FlowPhaseTerminal {
+	finished := r.finish(id, StatusFailed, code, errText)
+	if finished && !launch.FlowPhaseTerminal {
 		r.markNeedsAttention(id, errText)
 	}
 }
@@ -359,7 +418,7 @@ func cloneTime(t time.Time) *time.Time {
 }
 
 func terminal(status Status) bool {
-	return status == StatusSucceeded || status == StatusFailed
+	return status == StatusSucceeded || status == StatusFailed || status == StatusCanceled
 }
 
 func snapshotToFlowQuery(snapshot Snapshot) *flowquery.RuntimeJob {

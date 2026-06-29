@@ -307,6 +307,16 @@ func TestHandlerGraphQLLaunchFlowPhaseStartsRuntimeJobAndMarksPhaseRunning(t *te
 	if phase.Status != flowstore.PhaseRunning || flowstore.LatestPhaseLaunchID(phase) != payload.LaunchID {
 		t.Fatalf("implementation phase = %#v, want running with launch ID %q", phase, payload.LaunchID)
 	}
+	var duplicate struct {
+		Data   any   `json:"data"`
+		Errors []any `json:"errors"`
+	}
+	postGraphQL(t, handler, `mutation($input: LaunchFlowPhaseInput!) {
+		launchFlowPhase(input: $input) { launchId }
+	}`, map[string]any{"input": map[string]any{"flowId": record.FlowID, "phaseId": "implementation"}}, &duplicate)
+	if len(duplicate.Errors) == 0 {
+		t.Fatalf("duplicate launch response had no errors: %#v", duplicate)
+	}
 	final := waitForRuntimeJobStatus(t, registry, payload.Job.ID, runtimejobs.StatusSucceeded)
 	if final.ExitCode == nil || *final.ExitCode != 0 {
 		t.Fatalf("final job = %#v, want zero exit", final)
@@ -357,6 +367,200 @@ func TestHandlerGraphQLLaunchFlowPhaseStartsRuntimeJobAndMarksPhaseRunning(t *te
 	job := activeRuntimeJobForTest(query.Data.Flow.Phases, "implementation")
 	if job == nil || job.ID != payload.Job.ID || job.LaunchID != payload.LaunchID || job.Status != string(runtimejobs.StatusSucceeded) || !strings.Contains(job.LogTail, "done") {
 		t.Fatalf("active runtime job = %#v, want completed visible job", job)
+	}
+}
+
+func TestHandlerGraphQLCancelRuntimeJobStopsJobWithoutPhaseFailure(t *testing.T) {
+	store, _ := newFlowGraphQLStore(t)
+	record := createGraphQLFlow(t, store, flowstore.FlowRecord{
+		FlowID:       "cancel-flow",
+		Title:        "Cancel Flow",
+		Instructions: "cancel implementation",
+		RepoPath:     t.TempDir(),
+		WorktreePath: t.TempDir(),
+	})
+	record = completeGraphQLPhase(t, store, record.FlowID, "plan", flowstore.PhaseUpdate{Status: flowstore.PhaseCompleted})
+	record = completeGraphQLPhase(t, store, record.FlowID, "plan-review", flowstore.PhaseUpdate{Status: flowstore.PhaseCompleted, Outcome: flowstore.OutcomeApproved})
+	registry := runtimejobs.NewRegistry(runtimejobs.Options{
+		BuildCommand: func(ctx context.Context, launch actions.AgentLaunchContext) (*exec.Cmd, error) {
+			return exec.CommandContext(ctx, "/bin/sh", "-c", "sleep 5"), nil
+		},
+		UpdatePhase: store.SetPhase,
+	})
+	defer registry.CancelAll()
+	handler := newFlowGraphQLHandlerWithOptions(t, server.HandlerOptions{
+		FlowStore:      store,
+		RuntimeJobs:    registry,
+		RuntimeStarter: registry,
+		AgentCommand:   "codex",
+		StateRoot:      t.TempDir(),
+	})
+
+	var launch struct {
+		Data struct {
+			LaunchFlowPhase struct {
+				Job struct {
+					ID string `json:"id"`
+				} `json:"job"`
+			} `json:"launchFlowPhase"`
+		} `json:"data"`
+		Errors []any `json:"errors"`
+	}
+	postGraphQL(t, handler, `mutation($input: LaunchFlowPhaseInput!) {
+		launchFlowPhase(input: $input) { job { id } }
+	}`, map[string]any{"input": map[string]any{"flowId": record.FlowID, "phaseId": "implementation"}}, &launch)
+	if len(launch.Errors) != 0 || launch.Data.LaunchFlowPhase.Job.ID == "" {
+		t.Fatalf("launch response = %#v errors %#v", launch.Data.LaunchFlowPhase, launch.Errors)
+	}
+
+	var cancel struct {
+		Data struct {
+			CancelRuntimeJob struct {
+				ID     string `json:"id"`
+				Status string `json:"status"`
+				Error  string `json:"error"`
+			} `json:"cancelRuntimeJob"`
+		} `json:"data"`
+		Errors []any `json:"errors"`
+	}
+	postGraphQL(t, handler, `mutation($id: ID!) {
+		cancelRuntimeJob(id: $id) { id status error }
+	}`, map[string]any{"id": launch.Data.LaunchFlowPhase.Job.ID}, &cancel)
+	if len(cancel.Errors) != 0 {
+		t.Fatalf("cancel errors: %#v", cancel.Errors)
+	}
+	if cancel.Data.CancelRuntimeJob.Status != string(runtimejobs.StatusCanceled) ||
+		cancel.Data.CancelRuntimeJob.Error != "runtime job canceled" {
+		t.Fatalf("cancel payload = %#v, want canceled", cancel.Data.CancelRuntimeJob)
+	}
+	final := waitForRuntimeJobStatus(t, registry, launch.Data.LaunchFlowPhase.Job.ID, runtimejobs.StatusCanceled)
+	if final.Status != runtimejobs.StatusCanceled {
+		t.Fatalf("final job = %#v, want canceled", final)
+	}
+	updated, err := store.Read(record.FlowID)
+	if err != nil {
+		t.Fatalf("Read after cancel: %v", err)
+	}
+	if phase := phaseByIDForTest(updated, "implementation"); phase.Status != flowstore.PhaseReady {
+		t.Fatalf("cancel changed phase to %q, want ready for retry", phase.Status)
+	}
+
+	var retry struct {
+		Data struct {
+			LaunchFlowPhase struct {
+				Job struct {
+					ID string `json:"id"`
+				} `json:"job"`
+			} `json:"launchFlowPhase"`
+		} `json:"data"`
+		Errors []any `json:"errors"`
+	}
+	postGraphQL(t, handler, `mutation($input: LaunchFlowPhaseInput!) {
+		launchFlowPhase(input: $input) { job { id } }
+	}`, map[string]any{"input": map[string]any{"flowId": record.FlowID, "phaseId": "implementation"}}, &retry)
+	if len(retry.Errors) != 0 || retry.Data.LaunchFlowPhase.Job.ID == "" {
+		t.Fatalf("retry launch response = %#v errors %#v", retry.Data.LaunchFlowPhase, retry.Errors)
+	}
+
+	var repeatedCancel struct {
+		Data struct {
+			CancelRuntimeJob struct {
+				Status string `json:"status"`
+			} `json:"cancelRuntimeJob"`
+		} `json:"data"`
+		Errors []any `json:"errors"`
+	}
+	postGraphQL(t, handler, `mutation($id: ID!) {
+		cancelRuntimeJob(id: $id) { status }
+	}`, map[string]any{"id": launch.Data.LaunchFlowPhase.Job.ID}, &repeatedCancel)
+	if len(repeatedCancel.Errors) != 0 || repeatedCancel.Data.CancelRuntimeJob.Status != string(runtimejobs.StatusCanceled) {
+		t.Fatalf("repeated cancel response = %#v errors %#v", repeatedCancel.Data.CancelRuntimeJob, repeatedCancel.Errors)
+	}
+	updated, err = store.Read(record.FlowID)
+	if err != nil {
+		t.Fatalf("Read after repeated cancel: %v", err)
+	}
+	if phase := phaseByIDForTest(updated, "implementation"); phase.Status != flowstore.PhaseRunning {
+		t.Fatalf("repeated old-job cancel changed phase to %q, want retry still running", phase.Status)
+	}
+}
+
+func TestHandlerGraphQLCancelRuntimeJobWithAttachedSessionDoesNotReportResetError(t *testing.T) {
+	store, _ := newFlowGraphQLStore(t)
+	record := createGraphQLFlow(t, store, flowstore.FlowRecord{
+		FlowID:       "cancel-attached-flow",
+		Title:        "Cancel Attached Flow",
+		Instructions: "cancel implementation after hook attach",
+		RepoPath:     t.TempDir(),
+		WorktreePath: t.TempDir(),
+	})
+	record = completeGraphQLPhase(t, store, record.FlowID, "plan", flowstore.PhaseUpdate{Status: flowstore.PhaseCompleted})
+	record = completeGraphQLPhase(t, store, record.FlowID, "plan-review", flowstore.PhaseUpdate{Status: flowstore.PhaseCompleted, Outcome: flowstore.OutcomeApproved})
+	registry := runtimejobs.NewRegistry(runtimejobs.Options{
+		BuildCommand: func(ctx context.Context, launch actions.AgentLaunchContext) (*exec.Cmd, error) {
+			return exec.CommandContext(ctx, "/bin/sh", "-c", "sleep 5"), nil
+		},
+		UpdatePhase: store.SetPhase,
+	})
+	defer registry.CancelAll()
+	handler := newFlowGraphQLHandlerWithOptions(t, server.HandlerOptions{
+		FlowStore:      store,
+		RuntimeJobs:    registry,
+		RuntimeStarter: registry,
+		AgentCommand:   "codex",
+		StateRoot:      t.TempDir(),
+	})
+
+	var launch struct {
+		Data struct {
+			LaunchFlowPhase struct {
+				LaunchID string `json:"launchId"`
+				Job      struct {
+					ID string `json:"id"`
+				} `json:"job"`
+			} `json:"launchFlowPhase"`
+		} `json:"data"`
+		Errors []any `json:"errors"`
+	}
+	postGraphQL(t, handler, `mutation($input: LaunchFlowPhaseInput!) {
+		launchFlowPhase(input: $input) { launchId job { id } }
+	}`, map[string]any{"input": map[string]any{"flowId": record.FlowID, "phaseId": "implementation"}}, &launch)
+	if len(launch.Errors) != 0 || launch.Data.LaunchFlowPhase.Job.ID == "" || launch.Data.LaunchFlowPhase.LaunchID == "" {
+		t.Fatalf("launch response = %#v errors %#v", launch.Data.LaunchFlowPhase, launch.Errors)
+	}
+	_, err := store.AttachSession(flowstore.SessionAttachUpdate{
+		FlowID:  record.FlowID,
+		PhaseID: "implementation",
+		Session: flowstore.Session{
+			Provider:  "codex",
+			SessionID: "session-1",
+			LaunchID:  launch.Data.LaunchFlowPhase.LaunchID,
+		},
+	})
+	if err != nil {
+		t.Fatalf("AttachSession() error = %v", err)
+	}
+
+	var cancel struct {
+		Data struct {
+			CancelRuntimeJob struct {
+				Status string `json:"status"`
+			} `json:"cancelRuntimeJob"`
+		} `json:"data"`
+		Errors []any `json:"errors"`
+	}
+	postGraphQL(t, handler, `mutation($id: ID!) {
+		cancelRuntimeJob(id: $id) { status }
+	}`, map[string]any{"id": launch.Data.LaunchFlowPhase.Job.ID}, &cancel)
+	if len(cancel.Errors) != 0 || cancel.Data.CancelRuntimeJob.Status != string(runtimejobs.StatusCanceled) {
+		t.Fatalf("cancel response = %#v errors %#v", cancel.Data.CancelRuntimeJob, cancel.Errors)
+	}
+	updated, err := store.Read(record.FlowID)
+	if err != nil {
+		t.Fatalf("Read after cancel: %v", err)
+	}
+	if phase := phaseByIDForTest(updated, "implementation"); phase.Status != flowstore.PhaseRunning || flowstore.PhaseAwaitingSession(phase) {
+		t.Fatalf("attached cancel phase = %#v, want running with attached session", phase)
 	}
 }
 

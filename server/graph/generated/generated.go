@@ -93,7 +93,8 @@ type ComplexityRoot struct {
 	}
 
 	Mutation struct {
-		LaunchFlowPhase func(childComplexity int, input model.LaunchFlowPhaseInput) int
+		CancelRuntimeJob func(childComplexity int, id string) int
+		LaunchFlowPhase  func(childComplexity int, input model.LaunchFlowPhaseInput) int
 	}
 
 	PullRequest struct {
@@ -134,6 +135,7 @@ type ComplexityRoot struct {
 
 type MutationResolver interface {
 	LaunchFlowPhase(ctx context.Context, input model.LaunchFlowPhaseInput) (*model.LaunchFlowPhasePayload, error)
+	CancelRuntimeJob(ctx context.Context, id string) (*model.RuntimeJob, error)
 }
 type QueryResolver interface {
 	Health(ctx context.Context) (string, error)
@@ -421,6 +423,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Merge.Status(childComplexity), true
 
+	case "Mutation.cancelRuntimeJob":
+		if e.ComplexityRoot.Mutation.CancelRuntimeJob == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_cancelRuntimeJob_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.CancelRuntimeJob(childComplexity, args["id"].(string)), true
 	case "Mutation.launchFlowPhase":
 		if e.ComplexityRoot.Mutation.LaunchFlowPhase == nil {
 			break
@@ -677,6 +690,7 @@ type Query {
 
 type Mutation {
   launchFlowPhase(input: LaunchFlowPhaseInput!): LaunchFlowPhasePayload!
+  cancelRuntimeJob(id: ID!): RuntimeJob!
 }
 
 input LaunchFlowPhaseInput {
@@ -1074,6 +1088,20 @@ func (ec *executionContext) childFields___Type(ctx context.Context, field graphq
 // endregion ************************** internal!.gotpl ***************************
 
 // region    ***************************** args.gotpl *****************************
+
+func (ec *executionContext) field_Mutation_cancelRuntimeJob_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "id",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNID2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["id"] = arg0
+	return args, nil
+}
 
 func (ec *executionContext) field_Mutation_launchFlowPhase_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
@@ -2272,6 +2300,50 @@ func (ec *executionContext) fieldContext_Mutation_launchFlowPhase(ctx context.Co
 	}()
 	ctx = graphql.WithFieldContext(ctx, fc)
 	if fc.Args, err = ec.field_Mutation_launchFlowPhase_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_cancelRuntimeJob(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Mutation_cancelRuntimeJob(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().CancelRuntimeJob(ctx, fc.Args["id"].(string))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.RuntimeJob) graphql.Marshaler {
+			return ec.marshalNRuntimeJob2ᚖgithubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐRuntimeJob(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Mutation_cancelRuntimeJob(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_RuntimeJob(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_cancelRuntimeJob_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
 		ec.Error(ctx, err)
 		return fc, err
 	}
@@ -4394,6 +4466,13 @@ func (ec *executionContext) _Mutation(ctx context.Context, sel ast.SelectionSet)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "cancelRuntimeJob":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_cancelRuntimeJob(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -5277,6 +5356,10 @@ func (ec *executionContext) marshalNPullRequest2ᚖgithubᚗcomᚋbrianᚑbell�
 		return graphql.Null
 	}
 	return ec._PullRequest(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNRuntimeJob2githubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐRuntimeJob(ctx context.Context, sel ast.SelectionSet, v model.RuntimeJob) graphql.Marshaler {
+	return ec._RuntimeJob(ctx, sel, &v)
 }
 
 func (ec *executionContext) marshalNRuntimeJob2ᚖgithubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐRuntimeJob(ctx context.Context, sel ast.SelectionSet, v *model.RuntimeJob) graphql.Marshaler {

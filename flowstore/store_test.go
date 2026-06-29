@@ -978,6 +978,40 @@ func TestStoreAddPhaseLaunchIDMarksPhaseRunning(t *testing.T) {
 	}
 }
 
+func TestStoreAddPhaseLaunchIDRejectRunningPreventsDuplicateFreshLaunch(t *testing.T) {
+	root := t.TempDir()
+	store, err := flowstore.NewStore(flowstore.StoreOptions{Root: root})
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+	record, err := store.Create(flowstore.FlowRecord{
+		Title:        "No duplicate launch",
+		Instructions: "Launch once",
+		RepoPath:     filepath.Join(root, "repo"),
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	_, err = store.AddPhaseLaunchID(flowstore.PhaseLaunchUpdate{
+		FlowID:   record.FlowID,
+		PhaseID:  "plan",
+		LaunchID: "launch-1",
+	})
+	if err != nil {
+		t.Fatalf("first AddPhaseLaunchID() error = %v", err)
+	}
+
+	_, err = store.AddPhaseLaunchID(flowstore.PhaseLaunchUpdate{
+		FlowID:        record.FlowID,
+		PhaseID:       "plan",
+		LaunchID:      "launch-2",
+		RejectRunning: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "already running") {
+		t.Fatalf("second AddPhaseLaunchID() error = %v, want already running", err)
+	}
+}
+
 func TestStoreResetAwaitingSessionPhaseReturnsRunningOrphanToReady(t *testing.T) {
 	root := t.TempDir()
 	store, err := flowstore.NewStore(flowstore.StoreOptions{Root: root})

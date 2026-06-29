@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/brian-bell/flowstate/server"
+	"github.com/brian-bell/flowstate/server/runtimejobs"
 )
 
 const testSPAShell = `<html><body><main>flowstate web placeholder</main></body></html>`
@@ -613,6 +614,41 @@ func TestRunServesHTTPWithReportedURLAndToken(t *testing.T) {
 	if !strings.Contains(body, `"health":"ok"`) {
 		t.Fatalf("authorized response missing health data:\n%s", body)
 	}
+}
+
+func TestNewHandlerRejectsPartialRuntimeJobOptions(t *testing.T) {
+	_, err := server.NewHandler(server.HandlerOptions{
+		Token:          "test-token",
+		ListenerHost:   "127.0.0.1",
+		ListenerPort:   "4321",
+		StaticAssets:   testStaticAssets,
+		RuntimeStarter: starterOnly{},
+	})
+	if err == nil || !strings.Contains(err.Error(), "runtime job options must provide lookup, starter, and controller together") {
+		t.Fatalf("NewHandler() error = %v, want partial runtime options rejected", err)
+	}
+}
+
+func TestNewHandlerRejectsMixedRuntimeJobProviders(t *testing.T) {
+	registryA := runtimejobs.NewRegistry(runtimejobs.Options{})
+	registryB := runtimejobs.NewRegistry(runtimejobs.Options{})
+	_, err := server.NewHandler(server.HandlerOptions{
+		Token:          "test-token",
+		ListenerHost:   "127.0.0.1",
+		ListenerPort:   "4321",
+		StaticAssets:   testStaticAssets,
+		RuntimeJobs:    registryA,
+		RuntimeStarter: registryB,
+	})
+	if err == nil || !strings.Contains(err.Error(), "runtime job options must use one provider") {
+		t.Fatalf("NewHandler() error = %v, want mixed runtime providers rejected", err)
+	}
+}
+
+type starterOnly struct{}
+
+func (starterOnly) Start(context.Context, runtimejobs.StartRequest) (runtimejobs.Snapshot, error) {
+	return runtimejobs.Snapshot{}, nil
 }
 
 func newGraphQLRequest() *http.Request {

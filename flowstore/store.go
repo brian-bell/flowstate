@@ -234,11 +234,12 @@ type StartMetadataUpdate struct {
 // status (completed, skipped) records the launch without reopening the phase,
 // while non-resume launches always mark the phase running.
 type PhaseLaunchUpdate struct {
-	FlowID     string
-	PhaseID    string
-	LaunchID   string
-	Resume     bool
-	AutoLaunch bool
+	FlowID        string
+	PhaseID       string
+	LaunchID      string
+	Resume        bool
+	AutoLaunch    bool
+	RejectRunning bool
 }
 
 // PhaseResetUpdate identifies one UI-owned phase recovery mutation.
@@ -756,6 +757,9 @@ func (s *Store) AddPhaseLaunchID(update PhaseLaunchUpdate) (FlowRecord, error) {
 			return FlowRecord{}, fmt.Errorf("phase %q not found in flow %q", update.PhaseID, update.FlowID)
 		}
 		phase := record.Phases[phaseIndex]
+		if update.RejectRunning && !update.Resume && phase.Status == PhaseRunning {
+			return FlowRecord{}, fmt.Errorf("flow phase %q is already running", update.PhaseID)
+		}
 		if update.AutoLaunch {
 			if err := validateAutoPhaseLaunch(record, phase); err != nil {
 				return FlowRecord{}, err

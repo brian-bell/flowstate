@@ -15,6 +15,7 @@ type FlowStore interface {
 	List(flowstore.FlowFilter) ([]flowstore.FlowRecord, error)
 	Read(string) (flowstore.FlowRecord, error)
 	AddPhaseLaunchID(flowstore.PhaseLaunchUpdate) (flowstore.FlowRecord, error)
+	ResetAwaitingSessionPhase(flowstore.PhaseResetUpdate) (flowstore.FlowRecord, error)
 	SetPhase(flowstore.PhaseUpdate) (flowstore.FlowRecord, error)
 }
 
@@ -22,10 +23,15 @@ type RuntimeStarter interface {
 	Start(context.Context, runtimejobs.StartRequest) (runtimejobs.Snapshot, error)
 }
 
+type RuntimeController interface {
+	Cancel(string) runtimejobs.CancelResult
+}
+
 type Resolver struct {
 	FlowStore             FlowStore
 	RuntimeJobs           flowquery.RuntimeJobLookup
 	RuntimeStarter        RuntimeStarter
+	RuntimeController     RuntimeController
 	AgentCommand          string
 	CodexReasoningEffort  string
 	ClaudeReasoningEffort string

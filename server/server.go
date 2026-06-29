@@ -15,6 +15,7 @@ import (
 	"net/netip"
 	"net/url"
 	"path"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -45,6 +46,7 @@ type HandlerOptions struct {
 	FlowStore             FlowStore
 	RuntimeJobs           flowquery.RuntimeJobLookup
 	RuntimeStarter        graph.RuntimeStarter
+	RuntimeController     graph.RuntimeController
 	AgentCommand          string
 	CodexReasoningEffort  string
 	ClaudeReasoningEffort string
@@ -60,6 +62,7 @@ type Options struct {
 	StateRoot             string
 	RuntimeJobs           flowquery.RuntimeJobLookup
 	RuntimeStarter        graph.RuntimeStarter
+	RuntimeController     graph.RuntimeController
 	AgentCommand          string
 	CodexReasoningEffort  string
 	ClaudeReasoningEffort string
@@ -79,6 +82,7 @@ type FlowReader interface {
 type FlowStore interface {
 	FlowReader
 	AddPhaseLaunchID(flowstore.PhaseLaunchUpdate) (flowstore.FlowRecord, error)
+	ResetAwaitingSessionPhase(flowstore.PhaseResetUpdate) (flowstore.FlowRecord, error)
 	SetPhase(flowstore.PhaseUpdate) (flowstore.FlowRecord, error)
 }
 
@@ -87,6 +91,10 @@ type readOnlyFlowStore struct {
 }
 
 func (s readOnlyFlowStore) AddPhaseLaunchID(flowstore.PhaseLaunchUpdate) (flowstore.FlowRecord, error) {
+	return flowstore.FlowRecord{}, fmt.Errorf("flow store is read-only")
+}
+
+func (s readOnlyFlowStore) ResetAwaitingSessionPhase(flowstore.PhaseResetUpdate) (flowstore.FlowRecord, error) {
 	return flowstore.FlowRecord{}, fmt.Errorf("flow store is read-only")
 }
 
@@ -118,23 +126,18 @@ func Run(ctx context.Context, opts Options) error {
 	}
 	runtimeJobs := opts.RuntimeJobs
 	runtimeStarter := opts.RuntimeStarter
-	if runtimeStarter == nil {
-		if starter, ok := runtimeJobs.(graph.RuntimeStarter); ok {
-			runtimeStarter = starter
-		}
-	}
-	if runtimeJobs == nil {
-		if lookup, ok := runtimeStarter.(flowquery.RuntimeJobLookup); ok {
-			runtimeJobs = lookup
-		}
-	}
-	if runtimeJobs == nil || runtimeStarter == nil {
+	runtimeController := opts.RuntimeController
+	var ownedRegistry *runtimejobs.Registry
+	if runtimeJobs == nil && runtimeStarter == nil && runtimeController == nil {
 		registry := runtimejobs.NewRegistry(runtimejobs.Options{UpdatePhase: flowStore.SetPhase})
-		if runtimeJobs == nil {
-			runtimeJobs = registry
-		}
-		if runtimeStarter == nil {
-			runtimeStarter = registry
+		ownedRegistry = registry
+		runtimeJobs = registry
+		runtimeStarter = registry
+		runtimeController = registry
+	} else {
+		runtimeJobs, runtimeStarter, runtimeController, err = resolveRuntimeOptions(runtimeJobs, runtimeStarter, runtimeController)
+		if err != nil {
+			return err
 		}
 	}
 
@@ -161,6 +164,7 @@ func Run(ctx context.Context, opts Options) error {
 		FlowStore:             flowStore,
 		RuntimeJobs:           runtimeJobs,
 		RuntimeStarter:        runtimeStarter,
+		RuntimeController:     runtimeController,
 		AgentCommand:          opts.AgentCommand,
 		CodexReasoningEffort:  opts.CodexReasoningEffort,
 		ClaudeReasoningEffort: opts.ClaudeReasoningEffort,
@@ -199,6 +203,9 @@ func Run(ctx context.Context, opts Options) error {
 	case err := <-serveErr:
 		return err
 	case <-ctx.Done():
+		if ownedRegistry != nil {
+			ownedRegistry.CancelAll()
+		}
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := server.Shutdown(shutdownCtx); err != nil {
@@ -242,33 +249,27 @@ func NewHandler(opts HandlerOptions) (http.Handler, error) {
 	}
 	runtimeJobs := opts.RuntimeJobs
 	runtimeStarter := opts.RuntimeStarter
-	if runtimeStarter == nil {
-		if starter, ok := runtimeJobs.(graph.RuntimeStarter); ok {
-			runtimeStarter = starter
-		}
-	}
-	if runtimeJobs == nil {
-		if lookup, ok := runtimeStarter.(flowquery.RuntimeJobLookup); ok {
-			runtimeJobs = lookup
-		}
-	}
-	if runtimeJobs == nil || runtimeStarter == nil {
+	runtimeController := opts.RuntimeController
+	if runtimeJobs == nil && runtimeStarter == nil && runtimeController == nil {
 		registryOpts := runtimejobs.Options{}
 		if flowStore != nil {
 			registryOpts.UpdatePhase = flowStore.SetPhase
 		}
 		registry := runtimejobs.NewRegistry(registryOpts)
-		if runtimeJobs == nil {
-			runtimeJobs = registry
-		}
-		if runtimeStarter == nil {
-			runtimeStarter = registry
+		runtimeJobs = registry
+		runtimeStarter = registry
+		runtimeController = registry
+	} else {
+		runtimeJobs, runtimeStarter, runtimeController, err = resolveRuntimeOptions(runtimeJobs, runtimeStarter, runtimeController)
+		if err != nil {
+			return nil, err
 		}
 	}
 	graphqlHandler := handler.New(generated.NewExecutableSchema(generated.Config{Resolvers: &graph.Resolver{
 		FlowStore:             flowStore,
 		RuntimeJobs:           runtimeJobs,
 		RuntimeStarter:        runtimeStarter,
+		RuntimeController:     runtimeController,
 		AgentCommand:          opts.AgentCommand,
 		CodexReasoningEffort:  opts.CodexReasoningEffort,
 		ClaudeReasoningEffort: opts.ClaudeReasoningEffort,
@@ -301,6 +302,55 @@ func staticAssetOptions(opts HandlerOptions) (fs.FS, string, error) {
 		return nil, "", fmt.Errorf("SPA shell %q is a directory", spaShell)
 	}
 	return staticAssets, spaShell, nil
+}
+
+func resolveRuntimeOptions(runtimeJobs flowquery.RuntimeJobLookup, runtimeStarter graph.RuntimeStarter, runtimeController graph.RuntimeController) (flowquery.RuntimeJobLookup, graph.RuntimeStarter, graph.RuntimeController, error) {
+	provider, ok := singleRuntimeProvider(runtimeJobs, runtimeStarter, runtimeController)
+	if !ok {
+		return nil, nil, nil, fmt.Errorf("runtime job options must use one provider for lookup, starter, and controller")
+	}
+	if runtimeJobs == nil {
+		runtimeJobs, _ = provider.(flowquery.RuntimeJobLookup)
+	}
+	if runtimeStarter == nil {
+		runtimeStarter, _ = provider.(graph.RuntimeStarter)
+	}
+	if runtimeController == nil {
+		runtimeController, _ = provider.(graph.RuntimeController)
+	}
+	if runtimeJobs == nil || runtimeStarter == nil || runtimeController == nil {
+		return nil, nil, nil, fmt.Errorf("runtime job options must provide lookup, starter, and controller together")
+	}
+	return runtimeJobs, runtimeStarter, runtimeController, nil
+}
+
+func singleRuntimeProvider(values ...any) (any, bool) {
+	var provider any
+	for _, value := range values {
+		if value == nil {
+			continue
+		}
+		if provider == nil {
+			provider = value
+			continue
+		}
+		if !sameRuntimeProvider(provider, value) {
+			return nil, false
+		}
+	}
+	return provider, provider != nil
+}
+
+func sameRuntimeProvider(a, b any) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	va := reflect.ValueOf(a)
+	vb := reflect.ValueOf(b)
+	if !va.IsValid() || !vb.IsValid() || va.Type() != vb.Type() || !va.Type().Comparable() {
+		return false
+	}
+	return va.Interface() == vb.Interface()
 }
 
 func newStaticSPAHandler(staticAssets fs.FS, spaShell string) http.Handler {

@@ -62,9 +62,83 @@ func TestRegistryStartReturnsImmediatelyAndCapturesCappedLifecycle(t *testing.T)
 	}
 
 	now = now.Add(2 * time.Minute)
-	registry.EvictExpired()
 	if _, ok := registry.Lookup(snapshot.ID); ok {
-		t.Fatal("completed job should be evicted after TTL")
+		t.Fatal("completed job should be evicted after TTL during lookup")
+	}
+}
+
+func TestRegistryStartDetachesRuntimeJobFromCallerCancellation(t *testing.T) {
+	registry := runtimejobs.NewRegistry(runtimejobs.Options{
+		BuildCommand: func(ctx context.Context, launch actions.AgentLaunchContext) (*exec.Cmd, error) {
+			return exec.CommandContext(ctx, "/bin/sh", "-c", "sleep 0.05; printf 'done\n'"), nil
+		},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	snapshot, err := registry.Start(ctx, runtimejobs.StartRequest{
+		FlowID:   "flow-1",
+		PhaseID:  "implementation",
+		LaunchID: "launch-1",
+		Context: actions.AgentLaunchContext{
+			FlowID:      "flow-1",
+			FlowPhaseID: "implementation",
+			LaunchID:    "launch-1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	cancel()
+
+	final := waitForJobStatus(t, registry, snapshot.ID, runtimejobs.StatusSucceeded)
+	if !strings.Contains(final.LogTail, "done") {
+		t.Fatalf("log tail = %q, want detached command output", final.LogTail)
+	}
+}
+
+func TestRegistryCancelStopsJobWithoutMarkingPhaseNeedsAttention(t *testing.T) {
+	var mu sync.Mutex
+	var phaseUpdates []flowstore.PhaseUpdate
+	registry := runtimejobs.NewRegistry(runtimejobs.Options{
+		BuildCommand: func(ctx context.Context, launch actions.AgentLaunchContext) (*exec.Cmd, error) {
+			return exec.CommandContext(ctx, "/bin/sh", "-c", "sleep 5"), nil
+		},
+		UpdatePhase: func(update flowstore.PhaseUpdate) (flowstore.FlowRecord, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			phaseUpdates = append(phaseUpdates, update)
+			return flowstore.FlowRecord{}, nil
+		},
+	})
+
+	snapshot, err := registry.Start(context.Background(), runtimejobs.StartRequest{
+		FlowID:   "flow-1",
+		PhaseID:  "implementation",
+		LaunchID: "launch-1",
+		Context: actions.AgentLaunchContext{
+			FlowID:      "flow-1",
+			FlowPhaseID: "implementation",
+			LaunchID:    "launch-1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	canceled := registry.Cancel(snapshot.ID)
+	if !canceled.Found || !canceled.Transition || canceled.Snapshot.Status != runtimejobs.StatusCanceled || canceled.Snapshot.EndedAt == nil {
+		t.Fatalf("Cancel() = %#v; want transitioned canceled snapshot", canceled)
+	}
+	final := waitForJobStatus(t, registry, snapshot.ID, runtimejobs.StatusCanceled)
+	if final.Error != "runtime job canceled" {
+		t.Fatalf("canceled error = %q, want cancellation reason", final.Error)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	mu.Lock()
+	defer mu.Unlock()
+	if len(phaseUpdates) != 0 {
+		t.Fatalf("phase updates = %#v, want cancel to avoid needs_attention", phaseUpdates)
 	}
 }
 

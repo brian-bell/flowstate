@@ -17,10 +17,11 @@ const (
 )
 
 type Request struct {
-	Record     flowstore.FlowRecord
-	Phase      flowstore.FlowPhase
-	AutoLaunch bool
-	Headless   bool
+	Record        flowstore.FlowRecord
+	Phase         flowstore.FlowPhase
+	AutoLaunch    bool
+	Headless      bool
+	RejectRunning bool
 }
 
 type PreparedRequest struct {
@@ -110,10 +111,11 @@ func (l Launcher) Prepare(req PreparedRequest) (Result, error) {
 		planBody = body
 	}
 	updated, err := l.addPhaseLaunchID(flowstore.PhaseLaunchUpdate{
-		FlowID:     req.Record.FlowID,
-		PhaseID:    req.Phase.PhaseID,
-		LaunchID:   req.LaunchID,
-		AutoLaunch: req.AutoLaunch,
+		FlowID:        req.Record.FlowID,
+		PhaseID:       req.Phase.PhaseID,
+		LaunchID:      req.LaunchID,
+		AutoLaunch:    req.AutoLaunch,
+		RejectRunning: req.RejectRunning,
 	})
 	if err != nil {
 		if req.AutoLaunch && flowstore.IsAutoLaunchOutdated(err) {

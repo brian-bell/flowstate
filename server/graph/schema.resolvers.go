@@ -12,7 +12,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/brian-bell/flowstate/agent"
 	"github.com/brian-bell/flowstate/flowlaunch"
 	"github.com/brian-bell/flowstate/flowstore"
 	"github.com/brian-bell/flowstate/planstore"
@@ -72,9 +71,10 @@ func (r *mutationResolver) LaunchFlowPhase(ctx context.Context, input model.Laun
 		Templates:        r.FlowPromptTemplates,
 	}
 	prepared, err := launcher.Preflight(flowlaunch.Request{
-		Record:   record,
-		Phase:    phase,
-		Headless: true,
+		Record:        record,
+		Phase:         phase,
+		Headless:      true,
+		RejectRunning: true,
 	})
 	if err != nil {
 		return nil, err
@@ -102,6 +102,40 @@ func (r *mutationResolver) LaunchFlowPhase(ctx context.Context, input model.Laun
 		LaunchID: launchContext.LaunchID,
 		Job:      runtimeJobSnapshotToGraphQL(snapshot),
 	}, nil
+}
+
+// CancelRuntimeJob is the resolver for the cancelRuntimeJob field.
+func (r *mutationResolver) CancelRuntimeJob(ctx context.Context, id string) (*model.RuntimeJob, error) {
+	if r.RuntimeController == nil {
+		return nil, fmt.Errorf("runtime job controller is not configured")
+	}
+	result := r.RuntimeController.Cancel(id)
+	if !result.Found {
+		return nil, fmt.Errorf("runtime job %q not found", id)
+	}
+	snapshot := result.Snapshot
+	if result.Transition && snapshot.Status == runtimejobs.StatusCanceled {
+		if r.FlowStore == nil {
+			return nil, fmt.Errorf("runtime job canceled but flow store is not configured")
+		}
+		record, err := r.FlowStore.Read(snapshot.FlowID)
+		if err != nil {
+			return nil, fmt.Errorf("runtime job canceled but flow read failed: %w", err)
+		}
+		phase, ok := flowlaunch.PhaseByID(record, snapshot.PhaseID)
+		if ok &&
+			flowstore.LatestPhaseLaunchID(phase) == snapshot.LaunchID &&
+			flowstore.PhaseAwaitingSession(phase) &&
+			!flowstore.PhaseSessionLaunchMismatch(phase) {
+			if _, err := r.FlowStore.ResetAwaitingSessionPhase(flowstore.PhaseResetUpdate{
+				FlowID:  snapshot.FlowID,
+				PhaseID: snapshot.PhaseID,
+			}); err != nil {
+				return nil, fmt.Errorf("runtime job canceled but phase reset failed: %w", err)
+			}
+		}
+	}
+	return runtimeJobSnapshotToGraphQL(snapshot), nil
 }
 
 // Health is the resolver for the health field.
@@ -166,35 +200,3 @@ type (
 	mutationResolver struct{ *Resolver }
 	queryResolver    struct{ *Resolver }
 )
-
-func (r *mutationResolver) launchAgentCommand(input model.LaunchFlowPhaseInput) (string, error) {
-	command := r.AgentCommand
-	if input.AgentCommand != nil {
-		command = *input.AgentCommand
-	}
-	command = agent.Normalize(command)
-	if command == "" {
-		return "", fmt.Errorf("agent command is required")
-	}
-	if err := agent.Validate(command); err != nil {
-		return "", err
-	}
-	if command == agent.CommandCodexApp {
-		return "", fmt.Errorf("codex-app cannot be launched as a server runtime job")
-	}
-	return command, nil
-}
-
-func (r *mutationResolver) launchReasoningEffort(command string, input model.LaunchFlowPhaseInput) string {
-	if input.ReasoningEffort != nil {
-		return strings.TrimSpace(*input.ReasoningEffort)
-	}
-	switch command {
-	case agent.CommandCodex:
-		return r.CodexReasoningEffort
-	case agent.CommandClaude:
-		return r.ClaudeReasoningEffort
-	default:
-		return ""
-	}
-}
