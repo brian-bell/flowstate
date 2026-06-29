@@ -9,9 +9,10 @@ import (
 	"github.com/brian-bell/flowstate/server/flowquery"
 )
 
-type FlowReader interface {
+type FlowStore interface {
 	List(flowstore.FlowFilter) ([]flowstore.FlowRecord, error)
 	Read(string) (flowstore.FlowRecord, error)
+	SetPhase(flowstore.PhaseUpdate) (flowstore.FlowRecord, error)
 }
 
 type CreateFlowInput struct {
@@ -26,7 +27,7 @@ type FlowCreator interface {
 }
 
 type Resolver struct {
-	FlowReader  FlowReader
+	FlowStore   FlowStore
 	FlowCreator FlowCreator
 	RuntimeJobs flowquery.RuntimeJobLookup
 }

@@ -13,6 +13,7 @@ type Query {
 
 type Mutation {
   createFlow(input: CreateFlowInput!): Flow!
+  setFlowPhaseStatus(input: SetFlowPhaseStatusInput!): SetFlowPhaseStatusPayload!
 }
 
 input CreateFlowInput {
@@ -20,6 +21,20 @@ input CreateFlowInput {
   title: String!
   instructions: String!
   baseRef: String
+}
+
+input SetFlowPhaseStatusInput {
+  flowId: ID!
+  phaseId: ID!
+  status: FlowPhaseStatusInput!
+  outcome: String
+  notes: String
+  summary: String
+}
+
+type SetFlowPhaseStatusPayload {
+  flow: Flow!
+  phase: FlowPhase!
 }
 
 enum FlowStatus {
@@ -35,6 +50,14 @@ enum FlowStatus {
 enum FlowPhaseStatus {
   PENDING
   READY
+  RUNNING
+  NEEDS_ATTENTION
+  COMPLETED
+  BLOCKED
+  SKIPPED
+}
+
+enum FlowPhaseStatusInput {
   RUNNING
   NEEDS_ATTENTION
   COMPLETED

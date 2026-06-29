@@ -41,7 +41,7 @@ type HandlerOptions struct {
 	ListenerPort   string
 	Scope          ListenerScope
 	AllowIPv6Alias bool
-	FlowReader     FlowReader
+	FlowStore      FlowStore
 	FlowCreator    FlowCreator
 	RuntimeJobs    flowquery.RuntimeJobLookup
 	StaticAssets   fs.FS
@@ -62,9 +62,10 @@ type Options struct {
 	listen  func(network string, address string) (net.Listener, error)
 }
 
-type FlowReader interface {
+type FlowStore interface {
 	List(flowstore.FlowFilter) ([]flowstore.FlowRecord, error)
 	Read(string) (flowstore.FlowRecord, error)
+	SetPhase(flowstore.PhaseUpdate) (flowstore.FlowRecord, error)
 }
 
 type FlowCreator = graph.FlowCreator
@@ -117,7 +118,7 @@ func Run(ctx context.Context, opts Options) error {
 		ListenerPort:   listenerPort,
 		Scope:          resolvedListen.Scope,
 		AllowIPv6Alias: resolvedListen.Scope == ListenerScopeLoopback && listenerHost == "::1",
-		FlowReader:     flowStore,
+		FlowStore:      flowStore,
 		FlowCreator:    flowCreator,
 		RuntimeJobs:    opts.RuntimeJobs,
 	})
@@ -191,7 +192,7 @@ func NewHandler(opts HandlerOptions) (http.Handler, error) {
 		_, _ = w.Write([]byte(schemaGraphQL))
 	})
 	graphqlHandler := handler.New(generated.NewExecutableSchema(generated.Config{Resolvers: &graph.Resolver{
-		FlowReader:  opts.FlowReader,
+		FlowStore:   opts.FlowStore,
 		FlowCreator: opts.FlowCreator,
 		RuntimeJobs: opts.RuntimeJobs,
 	}}))
