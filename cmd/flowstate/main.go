@@ -1,12 +1,15 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -18,6 +21,7 @@ import (
 	"github.com/brian-bell/flowstate/model"
 	"github.com/brian-bell/flowstate/planstore"
 	"github.com/brian-bell/flowstate/scanner"
+	"github.com/brian-bell/flowstate/server"
 	"github.com/brian-bell/flowstate/sessions"
 	"github.com/brian-bell/flowstate/ui"
 )
@@ -36,9 +40,12 @@ type runDeps struct {
 	scan                    func(scanner.ScanOptions) ([]scanner.Repo, error)
 	startProgram            func([]scanner.Repo, config.Config) error
 	startProgramWithOptions func([]scanner.Repo, startProgramOptions) error
+	serve                   func(context.Context, serveOptions) error
 	stdin                   io.Reader
 	stdout                  io.Writer
 }
+
+type serveOptions = server.Options
 
 type startProgramOptions struct {
 	Config         config.Config
@@ -61,6 +68,9 @@ func run(args []string, deps runDeps) error {
 	if len(args) > 1 && args[1] == "flow" {
 		return runFlow(args, deps)
 	}
+	if len(args) > 1 && args[1] == "serve" {
+		return runServe(args, deps)
+	}
 
 	flags := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
@@ -70,7 +80,7 @@ func run(args []string, deps runDeps) error {
 		return err
 	}
 	if flags.NArg() > 0 {
-		return unknownCommandError(flags.Arg(0), []string{"plan", "flow", "session-hook"}, mainHelpText)
+		return unknownCommandError(flags.Arg(0), mainCommands, mainHelpText)
 	}
 
 	if *versionFlag {
@@ -116,6 +126,8 @@ func run(args []string, deps runDeps) error {
 	return nil
 }
 
+var mainCommands = []string{"plan", "flow", "serve", "session-hook"}
+
 func isHelpArg(arg string) bool {
 	return arg == "--help" || arg == "-h" || arg == "help"
 }
@@ -131,6 +143,7 @@ Launch the Flow TUI, or use a command to persist agent artifacts.
 Commands:
   plan          Save, list, read, and update saved plans.
   flow          Create, inspect, and update Flow records.
+  serve         Start the secure local HTTP server.
   session-hook  Capture Claude or Codex session hook payloads.
 
 Flags:
@@ -141,6 +154,7 @@ Examples:
   flowstate
   flowstate plan --help
   flowstate flow --help
+  flowstate serve --listen 127.0.0.1:0
   flowstate session-hook --provider codex
 `
 
@@ -235,6 +249,9 @@ func fillRunDeps(deps runDeps) runDeps {
 			deps.startProgramWithOptions = startProgram
 		}
 	}
+	if deps.serve == nil {
+		deps.serve = server.Run
+	}
 	if deps.stdin == nil {
 		deps.stdin = os.Stdin
 	}
@@ -243,6 +260,41 @@ func fillRunDeps(deps runDeps) runDeps {
 	}
 	return deps
 }
+
+func runServe(args []string, deps runDeps) error {
+	flags := flag.NewFlagSet("serve", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	flags.Usage = func() {
+		io.WriteString(deps.stdout, serveHelpText)
+	}
+	listen := flags.String("listen", "127.0.0.1:0", "local listen address")
+	if ok, err := parseCommandFlags(flags, args[2:]); err != nil {
+		return err
+	} else if ok {
+		return nil
+	}
+	if flags.NArg() > 0 {
+		return fmt.Errorf("serve accepts no positional arguments")
+	}
+	if err := server.ValidateListenAddress(*listen); err != nil {
+		return err
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := deps.serve(ctx, serveOptions{Listen: *listen, Stdout: deps.stdout}); err != nil {
+		return fmt.Errorf("serve: %w", err)
+	}
+	return nil
+}
+
+const serveHelpText = `Usage: flowstate serve [--listen host:port]
+
+Start the secure local HTTP server. The listen host must be localhost or a literal loopback IP.
+
+Flags:
+  --listen  Local listen address. Default: 127.0.0.1:0
+  --help    Print this help and exit.
+`
 
 func runSessionHook(args []string, deps runDeps) error {
 	flags := flag.NewFlagSet("session-hook", flag.ContinueOnError)
