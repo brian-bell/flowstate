@@ -20,6 +20,13 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Install pnpm
+        run: npm install --global pnpm@11.9.0
+
       - name: Check formatting
         run: test -z "$(gofmt -l .)"
 
@@ -28,3 +35,6 @@ jobs:
 
       - name: Build
         run: make build
+
+      - name: Check embedded web assets
+        run: test -z "$(git status --porcelain -- server/webassets/dist)"
