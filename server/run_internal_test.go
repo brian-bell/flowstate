@@ -19,6 +19,7 @@ func TestRunResolvesTailscaleListenBeforeBinding(t *testing.T) {
 		Listen: "tailscale:8080",
 		Token:  "test-token",
 		resolve: ListenResolveOptions{
+			TailscaleIPs: fakeTailscaleIPs("100.88.77.66"),
 			Interfaces: fakeListenInterfaces(
 				fakeListenInterface("utun8", net.FlagUp, "100.88.77.66/32"),
 			),
@@ -52,6 +53,7 @@ func TestRunReportsAssignedPortForTailscalePortZero(t *testing.T) {
 		Listen: "tailscale:0",
 		Token:  "test-token",
 		resolve: ListenResolveOptions{
+			TailscaleIPs: fakeTailscaleIPs("100.88.77.66"),
 			Interfaces: fakeListenInterfaces(
 				fakeListenInterface("utun8", net.FlagUp, "100.88.77.66/32"),
 			),

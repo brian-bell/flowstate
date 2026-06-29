@@ -72,6 +72,7 @@ func TestResolveListenAddressRejectsInvalidTargetsBeforeInterfaceLookup(t *testi
 
 func TestResolveListenAddressResolvesTailscaleIPv4(t *testing.T) {
 	got, err := ResolveListenAddress("tailscale:8080", ListenResolveOptions{
+		TailscaleIPs: fakeTailscaleIPs("100.88.77.66"),
 		Interfaces: fakeListenInterfaces(
 			fakeListenInterface("utun8", net.FlagUp, "100.88.77.66/32"),
 		),
@@ -86,6 +87,7 @@ func TestResolveListenAddressResolvesTailscaleIPv4(t *testing.T) {
 
 func TestResolveListenAddressResolvesTailscaleIPv6WhenIPv4Unavailable(t *testing.T) {
 	got, err := ResolveListenAddress("tailscale:8080", ListenResolveOptions{
+		TailscaleIPs: fakeTailscaleIPs("fd7a:115c:a1e0::1234"),
 		Interfaces: fakeListenInterfaces(
 			fakeListenInterface("utun8", net.FlagUp, "fd7a:115c:a1e0::1234/128"),
 		),
@@ -100,6 +102,7 @@ func TestResolveListenAddressResolvesTailscaleIPv6WhenIPv4Unavailable(t *testing
 
 func TestResolveListenAddressPrefersTailscaleIPv4(t *testing.T) {
 	got, err := ResolveListenAddress("tailscale:0", ListenResolveOptions{
+		TailscaleIPs: fakeTailscaleIPs("fd7a:115c:a1e0::1234", "100.88.77.66"),
 		Interfaces: fakeListenInterfaces(
 			fakeListenInterface("utun8", net.FlagUp, "fd7a:115c:a1e0::1234/128", "100.88.77.66/32"),
 		),
@@ -109,6 +112,22 @@ func TestResolveListenAddressPrefersTailscaleIPv4(t *testing.T) {
 	}
 	if got.Listen != "100.88.77.66:0" || got.Host != "100.88.77.66" || got.Port != "0" {
 		t.Fatalf("resolved listen = %#v, want IPv4 candidate with port 0", got)
+	}
+}
+
+func TestResolveListenAddressRejectsCGNATAddressNotReportedByTailscale(t *testing.T) {
+	_, err := ResolveListenAddress("tailscale:8080", ListenResolveOptions{
+		TailscaleIPs: fakeTailscaleIPs("100.99.99.99"),
+		Interfaces: fakeListenInterfaces(
+			fakeListenInterface("corp-vpn", net.FlagUp, "100.88.77.66/32"),
+		),
+	})
+	if err == nil {
+		t.Fatal("expected missing Tailscale address error")
+	}
+	want := `could not resolve tailscale listen target "tailscale:8080": no Tailscale address found on an up network interface`
+	if err.Error() != want {
+		t.Fatalf("error = %q, want %q", err.Error(), want)
 	}
 }
 
@@ -130,7 +149,8 @@ func TestResolveListenAddressReportsMissingTailscaleAddress(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := ResolveListenAddress("tailscale:8080", ListenResolveOptions{
-				Interfaces: fakeListenInterfaces(tt.interfaces...),
+				TailscaleIPs: fakeTailscaleIPs("100.88.77.66", "fd7a:115c:a1e0::1234"),
+				Interfaces:   fakeListenInterfaces(tt.interfaces...),
 			})
 			if err == nil {
 				t.Fatal("expected missing Tailscale address error")
@@ -138,6 +158,49 @@ func TestResolveListenAddressReportsMissingTailscaleAddress(t *testing.T) {
 			want := `could not resolve tailscale listen target "tailscale:8080": no Tailscale address found on an up network interface`
 			if err.Error() != want {
 				t.Fatalf("error = %q, want %q", err.Error(), want)
+			}
+		})
+	}
+}
+
+func TestParseTailscaleIPOutput(t *testing.T) {
+	tests := []struct {
+		name    string
+		output  string
+		want    []netip.Addr
+		wantErr bool
+	}{
+		{
+			name:   "ipv4 and ipv6",
+			output: "100.88.77.66\nfd7a:115c:a1e0::1234\n",
+			want: []netip.Addr{
+				netip.MustParseAddr("100.88.77.66"),
+				netip.MustParseAddr("fd7a:115c:a1e0::1234"),
+			},
+		},
+		{name: "empty output"},
+		{name: "invalid token", output: "100.88.77.66\nnot-an-ip\n", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseTailscaleIPOutput([]byte(tt.output))
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected parse error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseTailscaleIPOutput returned error: %v", err)
+			}
+			if len(got) != len(tt.want) {
+				t.Fatalf("addresses = %v, want %v", got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Fatalf("addresses = %v, want %v", got, tt.want)
+				}
 			}
 		})
 	}
@@ -166,6 +229,16 @@ func TestValidateListenAddressAcceptsOnlyLoopbackAndTailscaleTargets(t *testing.
 func fakeListenInterfaces(interfaces ...ListenInterface) func() ([]ListenInterface, error) {
 	return func() ([]ListenInterface, error) {
 		return interfaces, nil
+	}
+}
+
+func fakeTailscaleIPs(addrs ...string) func() ([]netip.Addr, error) {
+	return func() ([]netip.Addr, error) {
+		parsed := make([]netip.Addr, 0, len(addrs))
+		for _, addr := range addrs {
+			parsed = append(parsed, netip.MustParseAddr(addr))
+		}
+		return parsed, nil
 	}
 }
 

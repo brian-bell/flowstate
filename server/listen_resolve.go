@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"os/exec"
 	"strconv"
 	"strings"
 )
@@ -31,7 +32,8 @@ type ListenInterface struct {
 }
 
 type ListenResolveOptions struct {
-	Interfaces func() ([]ListenInterface, error)
+	Interfaces   func() ([]ListenInterface, error)
+	TailscaleIPs func() ([]netip.Addr, error)
 }
 
 func ResolveListenAddress(listen string, opts ListenResolveOptions) (ResolvedListen, error) {
@@ -52,7 +54,11 @@ func ResolveListenAddress(listen string, opts ListenResolveOptions) (ResolvedLis
 	if interfaces == nil {
 		interfaces = systemListenInterfaces
 	}
-	tailscaleHost, err := resolveTailscaleHost(interfaces)
+	tailscaleIPs := opts.TailscaleIPs
+	if tailscaleIPs == nil {
+		tailscaleIPs = systemTailscaleIPs
+	}
+	tailscaleHost, err := resolveTailscaleHost(interfaces, tailscaleIPs)
 	if err != nil {
 		return ResolvedListen{}, fmt.Errorf("could not resolve tailscale listen target %q: %w", target.listen, err)
 	}
@@ -95,7 +101,18 @@ func parseListenTarget(listen string) (listenTarget, error) {
 	return listenTarget{listen: listen, host: host, port: port}, nil
 }
 
-func resolveTailscaleHost(interfaces func() ([]ListenInterface, error)) (string, error) {
+func resolveTailscaleHost(interfaces func() ([]ListenInterface, error), tailscaleIPs func() ([]netip.Addr, error)) (string, error) {
+	reportedAddrs, err := tailscaleIPs()
+	if err != nil {
+		return "", err
+	}
+	reported := make(map[netip.Addr]bool, len(reportedAddrs))
+	for _, addr := range reportedAddrs {
+		if isUsableTailscaleAddr(addr) {
+			reported[addr] = true
+		}
+	}
+
 	ifaces, err := interfaces()
 	if err != nil {
 		return "", err
@@ -108,6 +125,9 @@ func resolveTailscaleHost(interfaces func() ([]ListenInterface, error)) (string,
 		for _, prefix := range iface.Addrs {
 			addr := prefix.Addr()
 			if !isUsableTailscaleAddr(addr) {
+				continue
+			}
+			if !reported[addr] {
 				continue
 			}
 			if addr.Is4() {
@@ -159,6 +179,31 @@ func systemListenInterfaces() ([]ListenInterface, error) {
 		})
 	}
 	return listenInterfaces, nil
+}
+
+func systemTailscaleIPs() ([]netip.Addr, error) {
+	cmd := exec.Command("tailscale", "ip")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		if msg := strings.TrimSpace(string(out)); msg != "" {
+			return nil, fmt.Errorf("tailscale ip failed: %w: %s", err, msg)
+		}
+		return nil, fmt.Errorf("tailscale ip failed: %w", err)
+	}
+	return parseTailscaleIPOutput(out)
+}
+
+func parseTailscaleIPOutput(out []byte) ([]netip.Addr, error) {
+	fields := strings.Fields(string(out))
+	addrs := make([]netip.Addr, 0, len(fields))
+	for _, field := range fields {
+		addr, err := netip.ParseAddr(field)
+		if err != nil {
+			return nil, fmt.Errorf("tailscale ip returned invalid address %q", field)
+		}
+		addrs = append(addrs, addr)
+	}
+	return addrs, nil
 }
 
 func parseInterfacePrefix(addr net.Addr) (netip.Prefix, bool) {
