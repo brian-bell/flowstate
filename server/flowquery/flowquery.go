@@ -55,7 +55,7 @@ func BuildWithRuntime(record flowstore.FlowRecord, runtimeJobs RuntimeJobLookup)
 		if err != nil {
 			return Flow{}, err
 		}
-		if nextIndex < 0 && view.Launchable && artifacts.NormalizePhaseID(phase.PhaseID) != "merge" {
+		if nextIndex < 0 && view.Launchable {
 			nextIndex = len(phases)
 		}
 		phases = append(phases, view)
@@ -102,14 +102,11 @@ func PhaseCanLaunch(record flowstore.FlowRecord, phase flowstore.FlowPhase) bool
 }
 
 func StaleRunningStatusForPhase(phase flowstore.FlowPhase) *StaleRunningStatus {
-	if phase.Status != flowstore.PhaseRunning {
-		return nil
-	}
 	if flowstore.PhaseSessionLaunchMismatch(phase) {
 		status := StaleSessionMismatch
 		return &status
 	}
-	if flowstore.PhaseAwaitingSession(phase) {
+	if phase.Status == flowstore.PhaseRunning && flowstore.PhaseAwaitingSession(phase) {
 		status := StaleAwaitingSession
 		return &status
 	}

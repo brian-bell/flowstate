@@ -41,6 +41,27 @@ func TestViewComputesLaunchabilityAndNextLaunchablePhase(t *testing.T) {
 	}
 }
 
+func TestViewReportsMergeAsNextLaunchablePhase(t *testing.T) {
+	record := flowstore.FlowRecord{
+		FlowID: "flow-1",
+		Phases: []flowstore.FlowPhase{
+			{PhaseID: "plan", Status: flowstore.PhaseCompleted, Order: 1},
+			{PhaseID: "plan-review", Status: flowstore.PhaseCompleted, Outcome: flowstore.OutcomeApproved, Order: 2},
+			{PhaseID: "implementation", Status: flowstore.PhaseCompleted, Order: 3},
+			{PhaseID: "review-loop", Status: flowstore.PhaseCompleted, Order: 4},
+			{PhaseID: "pr-creation", Status: flowstore.PhaseCompleted, Order: 5},
+			{PhaseID: "autoreview", Status: flowstore.PhaseCompleted, Order: 6},
+			{PhaseID: "merge", Status: flowstore.PhaseReady, Order: 7},
+		},
+	}
+
+	view := flowquery.Build(record)
+
+	if view.NextLaunchablePhase == nil || view.NextLaunchablePhase.PhaseID != "merge" {
+		t.Fatalf("next launchable phase = %#v, want merge", view.NextLaunchablePhase)
+	}
+}
+
 func TestPhaseCanLaunchRejectsAutoreviewWithoutSatisfiedPredecessorsOrPR(t *testing.T) {
 	phase := flowstore.FlowPhase{PhaseID: "autoreview", Status: flowstore.PhaseNeedsAttention, Order: 6}
 	withoutPR := flowstore.FlowRecord{
@@ -72,6 +93,16 @@ func TestPhaseCanLaunchRejectsAutoreviewWithoutSatisfiedPredecessorsOrPR(t *test
 }
 
 func TestStaleRunningStatusUsesSessionHelpersWithoutRuntimeVisibility(t *testing.T) {
+	mismatch := flowquery.BuildPhase(flowstore.FlowRecord{}, flowstore.FlowPhase{
+		PhaseID:   "review-loop",
+		Status:    flowstore.PhaseNeedsAttention,
+		LaunchIDs: []string{"launch-1"},
+		Sessions:  []flowstore.Session{{SessionID: "codex-1", LaunchID: "unknown-launch"}},
+	})
+	if mismatch.StaleRunningStatus == nil || *mismatch.StaleRunningStatus != flowquery.StaleSessionMismatch {
+		t.Fatalf("session-mismatch stale status = %#v, want session mismatch", mismatch.StaleRunningStatus)
+	}
+
 	awaiting := flowquery.BuildPhase(flowstore.FlowRecord{}, flowstore.FlowPhase{
 		PhaseID:   "implementation",
 		Status:    flowstore.PhaseRunning,
@@ -85,8 +116,8 @@ func TestStaleRunningStatusUsesSessionHelpersWithoutRuntimeVisibility(t *testing
 	}
 
 	missingSessionID := flowquery.BuildPhase(flowstore.FlowRecord{}, flowstore.FlowPhase{
-		PhaseID:   "implementation",
-		Status:    flowstore.PhaseRunning,
+		PhaseID:   "review-loop",
+		Status:    flowstore.PhaseNeedsAttention,
 		LaunchIDs: []string{"launch-1"},
 		Sessions:  []flowstore.Session{{LaunchID: "launch-1"}},
 	})
