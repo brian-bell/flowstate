@@ -4,6 +4,7 @@ import (
 	"github.com/brian-bell/flowstate/flowstore"
 	"github.com/brian-bell/flowstate/server/flowquery"
 	"github.com/brian-bell/flowstate/server/graph/model"
+	"github.com/brian-bell/flowstate/server/runtimejobs"
 )
 
 func flowToGraphQL(view flowquery.Flow) *model.Flow {
@@ -94,7 +95,39 @@ func runtimeJobToGraphQL(job *flowquery.RuntimeJob) *model.RuntimeJob {
 	if job == nil {
 		return nil
 	}
-	return &model.RuntimeJob{ID: job.ID, PhaseID: job.PhaseID, Status: job.Status}
+	return &model.RuntimeJob{
+		ID:               job.ID,
+		LaunchID:         job.LaunchID,
+		FlowID:           job.FlowID,
+		PhaseID:          job.PhaseID,
+		Status:           job.Status,
+		CreatedAt:        job.CreatedAt,
+		StartedAt:        job.StartedAt,
+		EndedAt:          job.EndedAt,
+		ExitCode:         job.ExitCode,
+		Error:            job.Error,
+		PhaseUpdateError: job.PhaseUpdateError,
+		LogTail:          job.LogTail,
+		LogTruncated:     job.LogTruncated,
+	}
+}
+
+func runtimeJobSnapshotToGraphQL(snapshot runtimejobs.Snapshot) *model.RuntimeJob {
+	return &model.RuntimeJob{
+		ID:               snapshot.ID,
+		LaunchID:         snapshot.LaunchID,
+		FlowID:           snapshot.FlowID,
+		PhaseID:          snapshot.PhaseID,
+		Status:           string(snapshot.Status),
+		CreatedAt:        snapshot.CreatedAt,
+		StartedAt:        snapshot.StartedAt,
+		EndedAt:          snapshot.EndedAt,
+		ExitCode:         snapshot.ExitCode,
+		Error:            snapshot.Error,
+		PhaseUpdateError: snapshot.PhaseUpdateError,
+		LogTail:          snapshot.LogTail,
+		LogTruncated:     snapshot.LogTruncated,
+	}
 }
 
 func flowStatusInputToStore(status model.FlowStatus) string {

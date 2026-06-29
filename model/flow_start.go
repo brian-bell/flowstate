@@ -2,7 +2,6 @@ package model
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/brian-bell/flowstate/actions"
 	"github.com/brian-bell/flowstate/flowstore"
@@ -272,17 +271,4 @@ func flowStartPromptRecord(flow flowstore.FlowRecord, req FlowStartRequest, work
 		flow.Commit = commit
 	}
 	return flow
-}
-
-func flowPlanPrompt(flow flowstore.FlowRecord, templates FlowPromptTemplates) string {
-	if strings.TrimSpace(templates.Plan) != "" {
-		prompt := renderFlowPromptTemplate(templates.Plan, flow, flowstore.FlowPhase{PhaseID: flowPlanPhaseID, Title: "Plan"}, flow.PlanPath, "")
-		return ensureFlowPhaseDoneInstruction(prompt, templates.Plan)
-	}
-	var b strings.Builder
-	b.WriteString("Use the flowstate skill for this launch.\n\n")
-	b.WriteString(flow.Instructions)
-	b.WriteString("\n\nProduce a plan only; do not start coding in this phase.")
-	b.WriteString("\nCreate and persist the plan with flowstate plan save, link it back with flowstate flow plan set, then report Flow persistence failures explicitly before ending.")
-	return ensureFlowPhaseDoneInstruction(b.String(), "")
 }

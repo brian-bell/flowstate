@@ -52,10 +52,27 @@ type FlowPhase struct {
 	ActiveRuntimeJob    *RuntimeJob                  `json:"activeRuntimeJob,omitempty"`
 }
 
+type LaunchFlowPhaseInput struct {
+	FlowID          string  `json:"flowId"`
+	PhaseID         string  `json:"phaseId"`
+	AgentCommand    *string `json:"agentCommand,omitempty"`
+	ReasoningEffort *string `json:"reasoningEffort,omitempty"`
+}
+
+type LaunchFlowPhasePayload struct {
+	FlowID   string      `json:"flowId"`
+	PhaseID  string      `json:"phaseId"`
+	LaunchID string      `json:"launchId"`
+	Job      *RuntimeJob `json:"job"`
+}
+
 type Merge struct {
 	Status   string     `json:"status"`
 	Commit   string     `json:"commit"`
 	MergedAt *time.Time `json:"mergedAt,omitempty"`
+}
+
+type Mutation struct {
 }
 
 type PullRequest struct {
@@ -71,9 +88,19 @@ type Query struct {
 }
 
 type RuntimeJob struct {
-	ID      string `json:"id"`
-	PhaseID string `json:"phaseId"`
-	Status  string `json:"status"`
+	ID               string     `json:"id"`
+	LaunchID         string     `json:"launchId"`
+	FlowID           string     `json:"flowId"`
+	PhaseID          string     `json:"phaseId"`
+	Status           string     `json:"status"`
+	CreatedAt        time.Time  `json:"createdAt"`
+	StartedAt        *time.Time `json:"startedAt,omitempty"`
+	EndedAt          *time.Time `json:"endedAt,omitempty"`
+	ExitCode         *int       `json:"exitCode,omitempty"`
+	Error            string     `json:"error"`
+	PhaseUpdateError string     `json:"phaseUpdateError"`
+	LogTail          string     `json:"logTail"`
+	LogTruncated     bool       `json:"logTruncated"`
 }
 
 type FlowPhaseStaleRunningStatus string

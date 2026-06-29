@@ -16,6 +16,7 @@ import (
 
 	"github.com/brian-bell/flowstate/actions"
 	"github.com/brian-bell/flowstate/config"
+	"github.com/brian-bell/flowstate/flowlaunch"
 	"github.com/brian-bell/flowstate/flowstore"
 	"github.com/brian-bell/flowstate/internal/version"
 	"github.com/brian-bell/flowstate/model"
@@ -285,7 +286,24 @@ func runServe(args []string, deps runDeps) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := deps.serve(ctx, serveOptions{Listen: *listen, StateRoot: runtimeArtifactRootWithEnv(cfg, deps.getenv), Stdout: deps.stdout}); err != nil {
+	if err := deps.serve(ctx, serveOptions{
+		Listen:                *listen,
+		StateRoot:             runtimeArtifactRootWithEnv(cfg, deps.getenv),
+		AgentCommand:          cfg.Agent.Command,
+		CodexReasoningEffort:  cfg.Agent.CodexReasoningEffort,
+		ClaudeReasoningEffort: cfg.Agent.ClaudeReasoningEffort,
+		FlowPromptTemplates: flowlaunch.PromptTemplates{
+			Plan:           cfg.FlowPrompts.Plan,
+			PlanReview:     cfg.FlowPrompts.PlanReview,
+			Implementation: cfg.FlowPrompts.Implementation,
+			ReviewLoop:     cfg.FlowPrompts.ReviewLoop,
+			PRCreation:     cfg.FlowPrompts.PRCreation,
+			Autoreview:     cfg.FlowPrompts.Autoreview,
+			Merge:          cfg.FlowPrompts.Merge,
+			Generic:        cfg.FlowPrompts.Generic,
+		},
+		Stdout: deps.stdout,
+	}); err != nil {
 		return fmt.Errorf("serve: %w", err)
 	}
 	return nil

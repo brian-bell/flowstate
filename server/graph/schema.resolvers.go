@@ -8,13 +8,101 @@ package graph
 import (
 	"context"
 	"fmt"
+	"os"
 	"slices"
+	"strings"
 
+	"github.com/brian-bell/flowstate/agent"
+	"github.com/brian-bell/flowstate/flowlaunch"
 	"github.com/brian-bell/flowstate/flowstore"
+	"github.com/brian-bell/flowstate/planstore"
 	"github.com/brian-bell/flowstate/server/flowquery"
 	"github.com/brian-bell/flowstate/server/graph/generated"
 	"github.com/brian-bell/flowstate/server/graph/model"
+	"github.com/brian-bell/flowstate/server/runtimejobs"
 )
+
+// LaunchFlowPhase is the resolver for the launchFlowPhase field.
+func (r *mutationResolver) LaunchFlowPhase(ctx context.Context, input model.LaunchFlowPhaseInput) (*model.LaunchFlowPhasePayload, error) {
+	if r.FlowStore == nil {
+		return nil, fmt.Errorf("flow store is not configured")
+	}
+	if r.RuntimeStarter == nil {
+		return nil, fmt.Errorf("runtime job starter is not configured")
+	}
+	record, err := r.FlowStore.Read(input.FlowID)
+	if err != nil {
+		return nil, err
+	}
+	phase, ok := flowlaunch.PhaseByID(record, input.PhaseID)
+	if !ok {
+		return nil, fmt.Errorf("phase %q not found in flow %q", input.PhaseID, input.FlowID)
+	}
+	if !flowlaunch.PhaseCanLaunch(record, phase) {
+		return nil, fmt.Errorf("phase %q is not launchable from status %q", phase.PhaseID, phase.Status)
+	}
+	command, err := r.launchAgentCommand(input)
+	if err != nil {
+		return nil, err
+	}
+	reasoningEffort := r.launchReasoningEffort(command, input)
+	launcher := flowlaunch.Launcher{
+		PlanMarkdownPath: func(planID string) (string, error) {
+			return planstore.MarkdownPath(r.StateRoot, planID)
+		},
+		ReadPlan: func(planID string) (string, error) {
+			planPath := record.PlanPath
+			if strings.TrimSpace(planPath) == "" {
+				var err error
+				planPath, err = planstore.MarkdownPath(r.StateRoot, planID)
+				if err != nil {
+					return "", err
+				}
+			}
+			data, err := os.ReadFile(planPath)
+			if err != nil {
+				return "", err
+			}
+			return string(data), nil
+		},
+		AddPhaseLaunchID: r.FlowStore.AddPhaseLaunchID,
+		SessionStateRoot: r.StateRoot,
+		AgentCommand:     command,
+		ReasoningEffort:  reasoningEffort,
+		Templates:        r.FlowPromptTemplates,
+	}
+	prepared, err := launcher.Preflight(flowlaunch.Request{
+		Record:   record,
+		Phase:    phase,
+		Headless: true,
+	})
+	if err != nil {
+		return nil, err
+	}
+	result, err := launcher.Prepare(prepared)
+	if err != nil {
+		return nil, err
+	}
+	launchContext := result.Context
+	launchContext.Embedded = false
+	launchContext.Headless = true
+	launchContext.FlowLaunchTracked = true
+	snapshot, err := r.RuntimeStarter.Start(ctx, runtimejobs.StartRequest{
+		FlowID:   record.FlowID,
+		PhaseID:  launchContext.FlowPhaseID,
+		LaunchID: launchContext.LaunchID,
+		Context:  launchContext,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &model.LaunchFlowPhasePayload{
+		FlowID:   record.FlowID,
+		PhaseID:  launchContext.FlowPhaseID,
+		LaunchID: launchContext.LaunchID,
+		Job:      runtimeJobSnapshotToGraphQL(snapshot),
+	}, nil
+}
 
 // Health is the resolver for the health field.
 func (r *queryResolver) Health(ctx context.Context) (string, error) {
@@ -23,10 +111,10 @@ func (r *queryResolver) Health(ctx context.Context) (string, error) {
 
 // Flows is the resolver for the flows field.
 func (r *queryResolver) Flows(ctx context.Context, statuses []model.FlowStatus) ([]*model.Flow, error) {
-	if r.FlowReader == nil {
+	if r.FlowStore == nil {
 		return nil, fmt.Errorf("flow reader is not configured")
 	}
-	records, err := r.FlowReader.List(flowstore.FlowFilter{})
+	records, err := r.FlowStore.List(flowstore.FlowFilter{})
 	if err != nil {
 		return nil, err
 	}
@@ -50,10 +138,10 @@ func (r *queryResolver) Flows(ctx context.Context, statuses []model.FlowStatus) 
 
 // Flow is the resolver for the flow field.
 func (r *queryResolver) Flow(ctx context.Context, id string) (*model.Flow, error) {
-	if r.FlowReader == nil {
+	if r.FlowStore == nil {
 		return nil, fmt.Errorf("flow reader is not configured")
 	}
-	record, err := r.FlowReader.Read(id)
+	record, err := r.FlowStore.Read(id)
 	if err != nil {
 		if flowstore.IsNotFound(err) {
 			return nil, nil
@@ -68,7 +156,45 @@ func (r *queryResolver) Flow(ctx context.Context, id string) (*model.Flow, error
 	return flow, nil
 }
 
+// Mutation returns generated.MutationResolver implementation.
+func (r *Resolver) Mutation() generated.MutationResolver { return &mutationResolver{r} }
+
 // Query returns generated.QueryResolver implementation.
 func (r *Resolver) Query() generated.QueryResolver { return &queryResolver{r} }
 
-type queryResolver struct{ *Resolver }
+type (
+	mutationResolver struct{ *Resolver }
+	queryResolver    struct{ *Resolver }
+)
+
+func (r *mutationResolver) launchAgentCommand(input model.LaunchFlowPhaseInput) (string, error) {
+	command := r.AgentCommand
+	if input.AgentCommand != nil {
+		command = *input.AgentCommand
+	}
+	command = agent.Normalize(command)
+	if command == "" {
+		return "", fmt.Errorf("agent command is required")
+	}
+	if err := agent.Validate(command); err != nil {
+		return "", err
+	}
+	if command == agent.CommandCodexApp {
+		return "", fmt.Errorf("codex-app cannot be launched as a server runtime job")
+	}
+	return command, nil
+}
+
+func (r *mutationResolver) launchReasoningEffort(command string, input model.LaunchFlowPhaseInput) string {
+	if input.ReasoningEffort != nil {
+		return strings.TrimSpace(*input.ReasoningEffort)
+	}
+	switch command {
+	case agent.CommandCodex:
+		return r.CodexReasoningEffort
+	case agent.CommandClaude:
+		return r.ClaudeReasoningEffort
+	default:
+		return ""
+	}
+}

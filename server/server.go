@@ -21,10 +21,12 @@ import (
 
 	"github.com/99designs/gqlgen/graphql/handler"
 	"github.com/99designs/gqlgen/graphql/handler/transport"
+	"github.com/brian-bell/flowstate/flowlaunch"
 	"github.com/brian-bell/flowstate/flowstore"
 	"github.com/brian-bell/flowstate/server/flowquery"
 	"github.com/brian-bell/flowstate/server/graph"
 	"github.com/brian-bell/flowstate/server/graph/generated"
+	"github.com/brian-bell/flowstate/server/runtimejobs"
 	"github.com/brian-bell/flowstate/server/webassets"
 )
 
@@ -34,24 +36,36 @@ var schemaGraphQL string
 const DefaultSPAShell = "_shell.html"
 
 type HandlerOptions struct {
-	Token          string
-	ListenerHost   string
-	ListenerPort   string
-	Scope          ListenerScope
-	AllowIPv6Alias bool
-	FlowReader     FlowReader
-	RuntimeJobs    flowquery.RuntimeJobLookup
-	StaticAssets   fs.FS
-	SPAShell       string
+	Token                 string
+	ListenerHost          string
+	ListenerPort          string
+	Scope                 ListenerScope
+	AllowIPv6Alias        bool
+	FlowReader            FlowReader
+	FlowStore             FlowStore
+	RuntimeJobs           flowquery.RuntimeJobLookup
+	RuntimeStarter        graph.RuntimeStarter
+	AgentCommand          string
+	CodexReasoningEffort  string
+	ClaudeReasoningEffort string
+	FlowPromptTemplates   flowlaunch.PromptTemplates
+	StateRoot             string
+	StaticAssets          fs.FS
+	SPAShell              string
 }
 
 type Options struct {
-	Listen      string
-	Token       string
-	StateRoot   string
-	RuntimeJobs flowquery.RuntimeJobLookup
-	Stdout      io.Writer
-	Started     chan<- Started
+	Listen                string
+	Token                 string
+	StateRoot             string
+	RuntimeJobs           flowquery.RuntimeJobLookup
+	RuntimeStarter        graph.RuntimeStarter
+	AgentCommand          string
+	CodexReasoningEffort  string
+	ClaudeReasoningEffort string
+	FlowPromptTemplates   flowlaunch.PromptTemplates
+	Stdout                io.Writer
+	Started               chan<- Started
 
 	resolve ListenResolveOptions
 	listen  func(network string, address string) (net.Listener, error)
@@ -60,6 +74,24 @@ type Options struct {
 type FlowReader interface {
 	List(flowstore.FlowFilter) ([]flowstore.FlowRecord, error)
 	Read(string) (flowstore.FlowRecord, error)
+}
+
+type FlowStore interface {
+	FlowReader
+	AddPhaseLaunchID(flowstore.PhaseLaunchUpdate) (flowstore.FlowRecord, error)
+	SetPhase(flowstore.PhaseUpdate) (flowstore.FlowRecord, error)
+}
+
+type readOnlyFlowStore struct {
+	FlowReader
+}
+
+func (s readOnlyFlowStore) AddPhaseLaunchID(flowstore.PhaseLaunchUpdate) (flowstore.FlowRecord, error) {
+	return flowstore.FlowRecord{}, fmt.Errorf("flow store is read-only")
+}
+
+func (s readOnlyFlowStore) SetPhase(flowstore.PhaseUpdate) (flowstore.FlowRecord, error) {
+	return flowstore.FlowRecord{}, fmt.Errorf("flow store is read-only")
 }
 
 type Started struct {
@@ -80,9 +112,30 @@ func Run(ctx context.Context, opts Options) error {
 		}
 		token = generated
 	}
-	flowReader, err := flowstore.NewStore(flowstore.StoreOptions{Root: opts.StateRoot})
+	flowStore, err := flowstore.NewStore(flowstore.StoreOptions{Root: opts.StateRoot})
 	if err != nil {
 		return err
+	}
+	runtimeJobs := opts.RuntimeJobs
+	runtimeStarter := opts.RuntimeStarter
+	if runtimeStarter == nil {
+		if starter, ok := runtimeJobs.(graph.RuntimeStarter); ok {
+			runtimeStarter = starter
+		}
+	}
+	if runtimeJobs == nil {
+		if lookup, ok := runtimeStarter.(flowquery.RuntimeJobLookup); ok {
+			runtimeJobs = lookup
+		}
+	}
+	if runtimeJobs == nil || runtimeStarter == nil {
+		registry := runtimejobs.NewRegistry(runtimejobs.Options{UpdatePhase: flowStore.SetPhase})
+		if runtimeJobs == nil {
+			runtimeJobs = registry
+		}
+		if runtimeStarter == nil {
+			runtimeStarter = registry
+		}
 	}
 
 	listen := net.Listen
@@ -100,13 +153,19 @@ func Run(ctx context.Context, opts Options) error {
 		return err
 	}
 	handler, err := NewHandler(HandlerOptions{
-		Token:          token,
-		ListenerHost:   listenerHost,
-		ListenerPort:   listenerPort,
-		Scope:          resolvedListen.Scope,
-		AllowIPv6Alias: resolvedListen.Scope == ListenerScopeLoopback && listenerHost == "::1",
-		FlowReader:     flowReader,
-		RuntimeJobs:    opts.RuntimeJobs,
+		Token:                 token,
+		ListenerHost:          listenerHost,
+		ListenerPort:          listenerPort,
+		Scope:                 resolvedListen.Scope,
+		AllowIPv6Alias:        resolvedListen.Scope == ListenerScopeLoopback && listenerHost == "::1",
+		FlowStore:             flowStore,
+		RuntimeJobs:           runtimeJobs,
+		RuntimeStarter:        runtimeStarter,
+		AgentCommand:          opts.AgentCommand,
+		CodexReasoningEffort:  opts.CodexReasoningEffort,
+		ClaudeReasoningEffort: opts.ClaudeReasoningEffort,
+		FlowPromptTemplates:   opts.FlowPromptTemplates,
+		StateRoot:             opts.StateRoot,
 	})
 	if err != nil {
 		return err
@@ -177,9 +236,44 @@ func NewHandler(opts HandlerOptions) (http.Handler, error) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(schemaGraphQL))
 	})
+	flowStore := opts.FlowStore
+	if flowStore == nil && opts.FlowReader != nil {
+		flowStore = readOnlyFlowStore{FlowReader: opts.FlowReader}
+	}
+	runtimeJobs := opts.RuntimeJobs
+	runtimeStarter := opts.RuntimeStarter
+	if runtimeStarter == nil {
+		if starter, ok := runtimeJobs.(graph.RuntimeStarter); ok {
+			runtimeStarter = starter
+		}
+	}
+	if runtimeJobs == nil {
+		if lookup, ok := runtimeStarter.(flowquery.RuntimeJobLookup); ok {
+			runtimeJobs = lookup
+		}
+	}
+	if runtimeJobs == nil || runtimeStarter == nil {
+		registryOpts := runtimejobs.Options{}
+		if flowStore != nil {
+			registryOpts.UpdatePhase = flowStore.SetPhase
+		}
+		registry := runtimejobs.NewRegistry(registryOpts)
+		if runtimeJobs == nil {
+			runtimeJobs = registry
+		}
+		if runtimeStarter == nil {
+			runtimeStarter = registry
+		}
+	}
 	graphqlHandler := handler.New(generated.NewExecutableSchema(generated.Config{Resolvers: &graph.Resolver{
-		FlowReader:  opts.FlowReader,
-		RuntimeJobs: opts.RuntimeJobs,
+		FlowStore:             flowStore,
+		RuntimeJobs:           runtimeJobs,
+		RuntimeStarter:        runtimeStarter,
+		AgentCommand:          opts.AgentCommand,
+		CodexReasoningEffort:  opts.CodexReasoningEffort,
+		ClaudeReasoningEffort: opts.ClaudeReasoningEffort,
+		FlowPromptTemplates:   opts.FlowPromptTemplates,
+		StateRoot:             opts.StateRoot,
 	}}))
 	graphqlHandler.AddTransport(transport.POST{})
 	mux.Handle("/graphql", requireBearerToken(opts.Token, graphqlHandler))

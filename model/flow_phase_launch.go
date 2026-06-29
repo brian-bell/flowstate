@@ -1,54 +1,29 @@
 package model
 
 import (
-	"fmt"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/brian-bell/flowstate/actions"
-	"github.com/brian-bell/flowstate/agent"
+	"github.com/brian-bell/flowstate/flowlaunch"
 	"github.com/brian-bell/flowstate/flowstore"
 	"github.com/brian-bell/flowstate/internal/artifacts"
-	"github.com/brian-bell/flowstate/server/flowquery"
-	"github.com/brian-bell/flowstate/ui"
 )
 
-type FlowPhaseLaunchRoute int
+type FlowPhaseLaunchRoute = flowlaunch.Route
 
 const (
-	FlowPhaseLaunchExternal FlowPhaseLaunchRoute = iota
-	FlowPhaseLaunchEmbedded
+	FlowPhaseLaunchExternal = flowlaunch.RouteExternal
+	FlowPhaseLaunchEmbedded = flowlaunch.RouteEmbedded
 )
 
-type FlowPhaseLaunchRequest struct {
-	Record     flowstore.FlowRecord
-	Phase      flowstore.FlowPhase
-	AutoLaunch bool
-	Headless   bool
-}
+type FlowPhaseLaunchRequest = flowlaunch.Request
 
-type FlowPhaseLaunchPreparedRequest struct {
-	FlowPhaseLaunchRequest
-	RepoPath     string
-	WorktreePath string
-	PlanPath     string
-	LaunchID     string
-}
+type FlowPhaseLaunchPreparedRequest = flowlaunch.PreparedRequest
 
-type FlowPhaseLaunchResult struct {
-	Context actions.AgentLaunchContext
-	Route   FlowPhaseLaunchRoute
-	Skipped bool
-}
+type FlowPhaseLaunchResult = flowlaunch.Result
 
-type FlowPhaseLaunchValidationError struct {
-	Message string
-}
-
-func (err FlowPhaseLaunchValidationError) Error() string {
-	return err.Message
-}
+type FlowPhaseLaunchValidationError = flowlaunch.ValidationError
 
 type FlowPhaseLauncher struct {
 	CurrentRepoPath      func() (string, bool)
@@ -60,6 +35,20 @@ type FlowPhaseLauncher struct {
 	AgentCommand         string
 	ReasoningEffort      string
 	PromptTemplates      FlowPromptTemplates
+}
+
+func (l FlowPhaseLauncher) launcher() flowlaunch.Launcher {
+	return flowlaunch.Launcher{
+		CurrentRepoPath:  l.CurrentRepoPath,
+		PlanMarkdownPath: l.PlanMarkdownPath,
+		ReadPlan:         l.ReadPlan,
+		AddPhaseLaunchID: l.AddFlowPhaseLaunchID,
+		NewLaunchID:      l.NewLaunchID,
+		SessionStateRoot: l.SessionStateRoot,
+		AgentCommand:     l.AgentCommand,
+		ReasoningEffort:  l.ReasoningEffort,
+		Templates:        l.PromptTemplates,
+	}
 }
 
 func (m Model) flowPhaseLauncher() FlowPhaseLauncher {
@@ -78,123 +67,11 @@ func (m Model) flowPhaseLauncher() FlowPhaseLauncher {
 }
 
 func (l FlowPhaseLauncher) Preflight(req FlowPhaseLaunchRequest) (FlowPhaseLaunchPreparedRequest, error) {
-	phaseID := artifacts.NormalizePhaseID(req.Phase.PhaseID)
-	if agent.Normalize(l.AgentCommand) == "" {
-		return FlowPhaseLaunchPreparedRequest{}, FlowPhaseLaunchValidationError{
-			Message: "Press A to choose " + ui.AgentInputPlaceholder + " before launching an agent",
-		}
-	}
-	repoPath := req.Record.RepoPath
-	if repoPath == "" && l.CurrentRepoPath != nil {
-		repoPath, _ = l.CurrentRepoPath()
-	}
-	worktreePath := req.Record.WorktreePath
-	if worktreePath == "" {
-		worktreePath = repoPath
-	}
-	if worktreePath == "" {
-		return FlowPhaseLaunchPreparedRequest{}, FlowPhaseLaunchValidationError{Message: "Cannot determine launch path for this flow"}
-	}
-	planPath := req.Record.PlanPath
-	if req.Record.PlanID != "" && planPath == "" {
-		if l.PlanMarkdownPath == nil {
-			return FlowPhaseLaunchPreparedRequest{}, FlowPhaseLaunchValidationError{Message: "Cannot determine linked plan path"}
-		}
-		var err error
-		planPath, err = l.PlanMarkdownPath(req.Record.PlanID)
-		if err != nil {
-			return FlowPhaseLaunchPreparedRequest{}, FlowPhaseLaunchValidationError{Message: err.Error()}
-		}
-	}
-	if phaseID == "plan-review" && req.Record.PlanID == "" {
-		return FlowPhaseLaunchPreparedRequest{}, FlowPhaseLaunchValidationError{Message: "Plan Review needs a linked plan before launch"}
-	}
-	generateLaunchID := l.NewLaunchID
-	if generateLaunchID == nil {
-		generateLaunchID = newLaunchID
-	}
-	return FlowPhaseLaunchPreparedRequest{
-		FlowPhaseLaunchRequest: req,
-		RepoPath:               repoPath,
-		WorktreePath:           worktreePath,
-		PlanPath:               planPath,
-		LaunchID:               generateLaunchID(),
-	}, nil
+	return l.launcher().Preflight(req)
 }
 
 func (l FlowPhaseLauncher) Prepare(req FlowPhaseLaunchPreparedRequest) (FlowPhaseLaunchResult, error) {
-	planBody := ""
-	if req.Record.PlanID != "" && flowPhasePromptNeedsPlanBody(req.Phase.PhaseID) {
-		body, err := l.readPlan(req.Record.PlanID)
-		if err != nil {
-			return FlowPhaseLaunchResult{}, fmt.Errorf("failed to read linked plan %s: %w", req.Record.PlanID, err)
-		}
-		planBody = body
-	}
-	updated, err := l.addFlowPhaseLaunchID(flowstore.PhaseLaunchUpdate{
-		FlowID:     req.Record.FlowID,
-		PhaseID:    req.Phase.PhaseID,
-		LaunchID:   req.LaunchID,
-		AutoLaunch: req.AutoLaunch,
-	})
-	if err != nil {
-		if req.AutoLaunch && flowstore.IsAutoLaunchOutdated(err) {
-			return FlowPhaseLaunchResult{Skipped: true}, nil
-		}
-		return FlowPhaseLaunchResult{}, fmt.Errorf("failed to mark flow phase running: %w", err)
-	}
-	launchPhase := req.Phase
-	if persistedPhase, ok := flowPhaseByID(updated, req.Phase.PhaseID); ok {
-		launchPhase = persistedPhase
-	}
-	command := agent.Normalize(l.AgentCommand)
-	ctx := actions.AgentLaunchContext{
-		Command:          command,
-		ReasoningEffort:  l.reasoningEffort(command),
-		LaunchID:         req.LaunchID,
-		RepoPath:         req.RepoPath,
-		WorktreePath:     req.WorktreePath,
-		Branch:           req.Record.Branch,
-		Commit:           req.Record.Commit,
-		SessionStateRoot: l.SessionStateRoot,
-		PlanID:           req.Record.PlanID,
-		PlanPath:         req.PlanPath,
-		FlowID:           req.Record.FlowID,
-		FlowPhaseID:      launchPhase.PhaseID,
-		InitialPrompt:    flowPhasePrompt(req.Record, launchPhase, req.PlanPath, planBody, l.PromptTemplates),
-	}
-	route := FlowPhaseLaunchExternal
-	switch command {
-	case agent.CommandCodex, agent.CommandClaude:
-		route = FlowPhaseLaunchEmbedded
-		ctx.FlowLaunchTracked = true
-		ctx.Embedded = true
-		ctx.Headless = req.Headless
-	}
-	return FlowPhaseLaunchResult{Context: ctx, Route: route}, nil
-}
-
-func (l FlowPhaseLauncher) readPlan(planID string) (string, error) {
-	if l.ReadPlan == nil {
-		return "", nil
-	}
-	return l.ReadPlan(planID)
-}
-
-func (l FlowPhaseLauncher) addFlowPhaseLaunchID(update flowstore.PhaseLaunchUpdate) (flowstore.FlowRecord, error) {
-	if l.AddFlowPhaseLaunchID == nil {
-		return flowstore.FlowRecord{}, nil
-	}
-	return l.AddFlowPhaseLaunchID(update)
-}
-
-func (l FlowPhaseLauncher) reasoningEffort(command string) string {
-	switch command {
-	case agent.CommandCodex, agent.CommandClaude:
-		return l.ReasoningEffort
-	default:
-		return ""
-	}
+	return l.launcher().Prepare(req)
 }
 
 func newlyCompletedFlowPhase(previous, current flowstore.FlowRecord) (flowstore.FlowPhase, bool) {
@@ -502,7 +379,7 @@ func (m Model) prepareDeferredAutoFlowPhaseLaunches() (Model, tea.Cmd) {
 }
 
 func flowPhaseCanLaunch(record flowstore.FlowRecord, phase flowstore.FlowPhase) bool {
-	return flowquery.PhaseCanLaunch(record, phase)
+	return flowlaunch.PhaseCanLaunch(record, phase)
 }
 
 func flowPhaseStatusDetail(phase flowstore.FlowPhase) string {

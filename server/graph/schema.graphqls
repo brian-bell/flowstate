@@ -1,5 +1,6 @@
 schema {
   query: Query
+  mutation: Mutation
 }
 
 scalar Time
@@ -8,6 +9,24 @@ type Query {
   health: String!
   flows(statuses: [FlowStatus!]): [Flow!]!
   flow(id: ID!): Flow
+}
+
+type Mutation {
+  launchFlowPhase(input: LaunchFlowPhaseInput!): LaunchFlowPhasePayload!
+}
+
+input LaunchFlowPhaseInput {
+  flowId: ID!
+  phaseId: ID!
+  agentCommand: String
+  reasoningEffort: String
+}
+
+type LaunchFlowPhasePayload {
+  flowId: ID!
+  phaseId: ID!
+  launchId: ID!
+  job: RuntimeJob!
 }
 
 enum FlowStatus {
@@ -95,6 +114,16 @@ type Merge {
 
 type RuntimeJob {
   id: ID!
+  launchId: ID!
+  flowId: ID!
   phaseId: ID!
   status: String!
+  createdAt: Time!
+  startedAt: Time
+  endedAt: Time
+  exitCode: Int
+  error: String!
+  phaseUpdateError: String!
+  logTail: String!
+  logTruncated: Boolean!
 }
