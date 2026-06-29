@@ -197,6 +197,10 @@ func newStaticSPAHandler(staticAssets fs.FS, spaShell string) http.Handler {
 			serveStaticPath(fileServer, w, r, staticFileName)
 			return
 		}
+		if isStaticAssetRequest(r.URL.Path) {
+			http.NotFound(w, r)
+			return
+		}
 		serveStaticPath(fileServer, w, r, spaShell)
 	})
 }
@@ -204,6 +208,14 @@ func newStaticSPAHandler(staticAssets fs.FS, spaShell string) http.Handler {
 func isReservedAPIPath(requestPath string) bool {
 	return strings.HasPrefix(requestPath, "/healthz/") ||
 		strings.HasPrefix(requestPath, "/graphql/")
+}
+
+func isStaticAssetRequest(requestPath string) bool {
+	cleanPath := path.Clean("/" + requestPath)
+	if strings.HasPrefix(cleanPath, "/assets/") {
+		return true
+	}
+	return path.Ext(cleanPath) != ""
 }
 
 func exactStaticFile(staticAssets fs.FS, requestPath string) (string, bool) {

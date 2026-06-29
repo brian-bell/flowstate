@@ -615,13 +615,15 @@ make clean   # Remove bin/ and web/dist
 
 `make build` requires pnpm. Use Corepack (`corepack enable`) or install pnpm
 directly, then run `make build`. The build runs `pnpm --dir web install
---frozen-lockfile`, builds the TanStack Start SPA, verifies
-`web/dist/client/_shell.html`, copies `web/dist/client/` into
-`server/webassets/dist/`, and then compiles the Go binary. The copied embedded
-assets are intentionally checked in so Go-only test runs work from a clean
-checkout; `web/dist/` and `web/node_modules/` remain ignored.
+--frozen-lockfile`, typechecks the frontend, builds the TanStack Start SPA,
+verifies `web/dist/client/_shell.html`, copies `web/dist/client/` into
+`server/webassets/dist/`, normalizes generated shell timestamps, and then
+compiles the Go binary. The copied embedded assets are intentionally checked in
+so Go-only test runs work from a clean checkout; `web/dist/` and
+`web/node_modules/` remain ignored.
 
-CI requires a clean `gofmt -l .`, `make test`, and `make build`.
+CI requires a clean `gofmt -l .`, `make test`, `make build`, and unchanged
+embedded assets after the build.
 
 ## Requirements
 
