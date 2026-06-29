@@ -4,3 +4,8 @@
 .env
 bin/
 dist/
+node_modules/
+web/dist/
+web/node_modules/
+!server/webassets/dist/
+!server/webassets/dist/**
