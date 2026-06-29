@@ -149,6 +149,16 @@ func TestRegistryNonZeroExitMarksPhaseNeedsAttention(t *testing.T) {
 		BuildCommand: func(ctx context.Context, launch actions.AgentLaunchContext) (*exec.Cmd, error) {
 			return exec.CommandContext(ctx, "/bin/sh", "-c", "echo bad; exit 7"), nil
 		},
+		ReadFlow: func(flowID string) (flowstore.FlowRecord, error) {
+			return flowstore.FlowRecord{
+				FlowID: flowID,
+				Phases: []flowstore.FlowPhase{{
+					PhaseID:   "implementation",
+					Status:    flowstore.PhaseRunning,
+					LaunchIDs: []string{"launch-1"},
+				}},
+			}, nil
+		},
 		UpdatePhase: func(update flowstore.PhaseUpdate) (flowstore.FlowRecord, error) {
 			mu.Lock()
 			defer mu.Unlock()
@@ -191,6 +201,56 @@ func TestRegistryNonZeroExitMarksPhaseNeedsAttention(t *testing.T) {
 		phaseUpdates[0].PhaseID != "implementation" ||
 		phaseUpdates[0].Status != flowstore.PhaseNeedsAttention {
 		t.Fatalf("phase updates = %#v, want one needs_attention update", phaseUpdates)
+	}
+}
+
+func TestRegistryNonZeroExitPreservesExistingPhaseUpdate(t *testing.T) {
+	var mu sync.Mutex
+	var phaseUpdates []flowstore.PhaseUpdate
+	registry := runtimejobs.NewRegistry(runtimejobs.Options{
+		BuildCommand: func(ctx context.Context, launch actions.AgentLaunchContext) (*exec.Cmd, error) {
+			return exec.CommandContext(ctx, "/bin/sh", "-c", "exit 7"), nil
+		},
+		ReadFlow: func(flowID string) (flowstore.FlowRecord, error) {
+			return flowstore.FlowRecord{
+				FlowID: flowID,
+				Phases: []flowstore.FlowPhase{{
+					PhaseID:   "implementation",
+					Status:    flowstore.PhaseNeedsAttention,
+					Outcome:   "agent_reported",
+					Notes:     "specific agent failure notes",
+					LaunchIDs: []string{"launch-1"},
+				}},
+			}, nil
+		},
+		UpdatePhase: func(update flowstore.PhaseUpdate) (flowstore.FlowRecord, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			phaseUpdates = append(phaseUpdates, update)
+			return flowstore.FlowRecord{}, nil
+		},
+	})
+
+	snapshot, err := registry.Start(context.Background(), runtimejobs.StartRequest{
+		FlowID:   "flow-1",
+		PhaseID:  "implementation",
+		LaunchID: "launch-1",
+		Context: actions.AgentLaunchContext{
+			FlowID:      "flow-1",
+			FlowPhaseID: "implementation",
+			LaunchID:    "launch-1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	waitForJobStatus(t, registry, snapshot.ID, runtimejobs.StatusFailed)
+	time.Sleep(50 * time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(phaseUpdates) != 0 {
+		t.Fatalf("phase updates = %#v, want runtime failure to preserve existing phase update", phaseUpdates)
 	}
 }
 

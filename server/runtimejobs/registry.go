@@ -36,6 +36,8 @@ const (
 
 type CommandBuilder func(context.Context, actions.AgentLaunchContext) (*exec.Cmd, error)
 
+type FlowReader func(string) (flowstore.FlowRecord, error)
+
 type PhaseUpdater func(flowstore.PhaseUpdate) (flowstore.FlowRecord, error)
 
 type Options struct {
@@ -45,6 +47,7 @@ type Options struct {
 	WaitDelay    time.Duration
 	Now          func() time.Time
 	BuildCommand CommandBuilder
+	ReadFlow     FlowReader
 	UpdatePhase  PhaseUpdater
 }
 
@@ -86,6 +89,7 @@ type Registry struct {
 	waitDelay    time.Duration
 	now          func() time.Time
 	buildCommand CommandBuilder
+	readFlow     FlowReader
 	updatePhase  PhaseUpdater
 	nextID       atomic.Uint64
 }
@@ -125,6 +129,7 @@ func NewRegistry(opts Options) *Registry {
 		waitDelay:    opts.WaitDelay,
 		now:          now,
 		buildCommand: buildCommand,
+		readFlow:     opts.ReadFlow,
 		updatePhase:  opts.UpdatePhase,
 	}
 }
@@ -365,6 +370,9 @@ func (r *Registry) markNeedsAttention(id, errText string) {
 	if !ok {
 		return
 	}
+	if !r.phaseStillActiveForFailure(snapshot) {
+		return
+	}
 	_, err := r.updatePhase(flowstore.PhaseUpdate{
 		FlowID:  snapshot.FlowID,
 		PhaseID: snapshot.PhaseID,
@@ -379,6 +387,34 @@ func (r *Registry) markNeedsAttention(id, errText string) {
 	defer r.mu.Unlock()
 	if j, ok := r.jobs[id]; ok {
 		j.snapshot.PhaseUpdateError = err.Error()
+	}
+}
+
+func (r *Registry) phaseStillActiveForFailure(snapshot Snapshot) bool {
+	if r.readFlow == nil {
+		return true
+	}
+	record, err := r.readFlow(snapshot.FlowID)
+	if err != nil {
+		r.setPhaseUpdateError(snapshot.ID, fmt.Sprintf("read flow before runtime failure update: %v", err))
+		return false
+	}
+	phaseID := artifacts.NormalizePhaseID(snapshot.PhaseID)
+	for _, phase := range record.Phases {
+		if artifacts.NormalizePhaseID(phase.PhaseID) != phaseID {
+			continue
+		}
+		return phase.Status == flowstore.PhaseRunning && flowstore.LatestPhaseLaunchID(phase) == snapshot.LaunchID
+	}
+	r.setPhaseUpdateError(snapshot.ID, fmt.Sprintf("phase %q not found in flow %q", snapshot.PhaseID, snapshot.FlowID))
+	return false
+}
+
+func (r *Registry) setPhaseUpdateError(id, errText string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if j, ok := r.jobs[id]; ok {
+		j.snapshot.PhaseUpdateError = errText
 	}
 }
 

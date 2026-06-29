@@ -129,7 +129,7 @@ func Run(ctx context.Context, opts Options) error {
 	runtimeController := opts.RuntimeController
 	var ownedRegistry *runtimejobs.Registry
 	if runtimeJobs == nil && runtimeStarter == nil && runtimeController == nil {
-		registry := runtimejobs.NewRegistry(runtimejobs.Options{UpdatePhase: flowStore.SetPhase})
+		registry := runtimejobs.NewRegistry(runtimejobs.Options{ReadFlow: flowStore.Read, UpdatePhase: flowStore.SetPhase})
 		ownedRegistry = registry
 		runtimeJobs = registry
 		runtimeStarter = registry
@@ -253,6 +253,7 @@ func NewHandler(opts HandlerOptions) (http.Handler, error) {
 	if runtimeJobs == nil && runtimeStarter == nil && runtimeController == nil {
 		registryOpts := runtimejobs.Options{}
 		if flowStore != nil {
+			registryOpts.ReadFlow = flowStore.Read
 			registryOpts.UpdatePhase = flowStore.SetPhase
 		}
 		registry := runtimejobs.NewRegistry(registryOpts)

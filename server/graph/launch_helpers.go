@@ -2,7 +2,6 @@ package graph
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/brian-bell/flowstate/agent"
 	"github.com/brian-bell/flowstate/server/graph/model"
@@ -26,16 +25,21 @@ func (r *mutationResolver) launchAgentCommand(input model.LaunchFlowPhaseInput) 
 	return command, nil
 }
 
-func (r *mutationResolver) launchReasoningEffort(command string, input model.LaunchFlowPhaseInput) string {
+func (r *mutationResolver) launchReasoningEffort(command string, input model.LaunchFlowPhaseInput) (string, error) {
+	effort := ""
 	if input.ReasoningEffort != nil {
-		return strings.TrimSpace(*input.ReasoningEffort)
+		effort = *input.ReasoningEffort
+	} else {
+		switch command {
+		case agent.CommandCodex:
+			effort = r.CodexReasoningEffort
+		case agent.CommandClaude:
+			effort = r.ClaudeReasoningEffort
+		}
 	}
-	switch command {
-	case agent.CommandCodex:
-		return r.CodexReasoningEffort
-	case agent.CommandClaude:
-		return r.ClaudeReasoningEffort
-	default:
-		return ""
+	effort = agent.NormalizeReasoningEffort(effort)
+	if err := agent.ValidateReasoningEffort(command, effort); err != nil {
+		return "", err
 	}
+	return effort, nil
 }

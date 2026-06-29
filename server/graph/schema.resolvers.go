@@ -45,7 +45,10 @@ func (r *mutationResolver) LaunchFlowPhase(ctx context.Context, input model.Laun
 	if err != nil {
 		return nil, err
 	}
-	reasoningEffort := r.launchReasoningEffort(command, input)
+	reasoningEffort, err := r.launchReasoningEffort(command, input)
+	if err != nil {
+		return nil, err
+	}
 	launcher := flowlaunch.Launcher{
 		PlanMarkdownPath: func(planID string) (string, error) {
 			return planstore.MarkdownPath(r.StateRoot, planID)

@@ -877,6 +877,56 @@ func TestHandlerGraphQLLaunchFlowPhaseStartsRuntimeJobAndMarksPhaseRunning(t *te
 	}
 }
 
+func TestHandlerGraphQLLaunchFlowPhaseRejectsInvalidReasoningEffortBeforeStateChange(t *testing.T) {
+	store, _ := newFlowGraphQLStore(t)
+	record := createGraphQLFlow(t, store, flowstore.FlowRecord{
+		FlowID:       "invalid-effort-flow",
+		Title:        "Invalid Effort Flow",
+		Instructions: "launch implementation",
+		RepoPath:     t.TempDir(),
+		WorktreePath: t.TempDir(),
+	})
+	record = completeGraphQLPhase(t, store, record.FlowID, "plan", flowstore.PhaseUpdate{Status: flowstore.PhaseCompleted})
+	record = completeGraphQLPhase(t, store, record.FlowID, "plan-review", flowstore.PhaseUpdate{Status: flowstore.PhaseCompleted, Outcome: flowstore.OutcomeApproved})
+	registry := runtimejobs.NewRegistry(runtimejobs.Options{
+		BuildCommand: func(ctx context.Context, launch actions.AgentLaunchContext) (*exec.Cmd, error) {
+			t.Fatalf("runtime command should not be built for invalid reasoning effort")
+			return nil, nil
+		},
+		UpdatePhase: store.SetPhase,
+	})
+	handler := newFlowGraphQLHandlerWithOptions(t, server.HandlerOptions{
+		FlowStore:      store,
+		RuntimeJobs:    registry,
+		RuntimeStarter: registry,
+		AgentCommand:   "codex",
+		StateRoot:      t.TempDir(),
+	})
+
+	var out struct {
+		Data   any   `json:"data"`
+		Errors []any `json:"errors"`
+	}
+	postGraphQL(t, handler, `mutation($input: LaunchFlowPhaseInput!) {
+		launchFlowPhase(input: $input) { launchId }
+	}`, map[string]any{"input": map[string]any{
+		"flowId":          record.FlowID,
+		"phaseId":         "implementation",
+		"reasoningEffort": "turbo",
+	}}, &out)
+	if !graphQLErrorsContain(out.Errors, `unsupported reasoning effort "turbo" for codex`) {
+		t.Fatalf("GraphQL errors = %#v, want unsupported reasoning effort", out.Errors)
+	}
+	updated, err := store.Read(record.FlowID)
+	if err != nil {
+		t.Fatalf("Read updated flow: %v", err)
+	}
+	phase := phaseByIDForTest(updated, "implementation")
+	if phase.Status != flowstore.PhaseReady || len(phase.LaunchIDs) != 0 {
+		t.Fatalf("implementation phase = %#v, want ready with no launch IDs", phase)
+	}
+}
+
 func TestHandlerGraphQLCancelRuntimeJobStopsJobWithoutPhaseFailure(t *testing.T) {
 	store, _ := newFlowGraphQLStore(t)
 	record := createGraphQLFlow(t, store, flowstore.FlowRecord{
