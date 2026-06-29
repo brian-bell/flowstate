@@ -525,6 +525,66 @@ func TestHandlerGraphQLSetFlowPhaseStatusHandlesInputEnumValidation(t *testing.T
 	}
 }
 
+func TestHandlerGraphQLSetFlowPhaseStatusReturnsRuntimeJobWhenAvailable(t *testing.T) {
+	store, _ := newFlowGraphQLStore(t)
+	record := createGraphQLFlow(t, store, flowstore.FlowRecord{
+		FlowID:       "runtime-flow",
+		Title:        "Runtime Flow",
+		Instructions: "return runtime job details in mutation payloads",
+		RepoPath:     t.TempDir(),
+	})
+	handler := newFlowGraphQLHandlerWithRuntime(t, store, staticRuntimeJobLookup{
+		job: &flowquery.RuntimeJob{ID: "job-plan", PhaseID: "plan", Status: "running"},
+	})
+
+	var out struct {
+		Data struct {
+			SetFlowPhaseStatus struct {
+				Flow struct {
+					Phases []struct {
+						PhaseID          string             `json:"phaseId"`
+						ActiveRuntimeJob *graphQLRuntimeJob `json:"activeRuntimeJob"`
+					} `json:"phases"`
+				} `json:"flow"`
+				Phase struct {
+					PhaseID          string             `json:"phaseId"`
+					ActiveRuntimeJob *graphQLRuntimeJob `json:"activeRuntimeJob"`
+				} `json:"phase"`
+			} `json:"setFlowPhaseStatus"`
+		} `json:"data"`
+		Errors []any `json:"errors"`
+	}
+	postGraphQL(t, handler, `mutation($input: SetFlowPhaseStatusInput!) {
+		setFlowPhaseStatus(input: $input) {
+			flow { phases { phaseId activeRuntimeJob { id phaseId status } } }
+			phase { phaseId activeRuntimeJob { id phaseId status } }
+		}
+	}`, map[string]any{"input": map[string]any{
+		"flowId":  record.FlowID,
+		"phaseId": "plan",
+		"status":  "RUNNING",
+	}}, &out)
+	if len(out.Errors) != 0 {
+		t.Fatalf("GraphQL errors: %#v", out.Errors)
+	}
+	assertGraphQLRuntimeJob(t, out.Data.SetFlowPhaseStatus.Phase.ActiveRuntimeJob, graphQLRuntimeJob{
+		ID:      "job-plan",
+		PhaseID: "plan",
+		Status:  "running",
+	})
+	var flowPhaseRuntimeJob *graphQLRuntimeJob
+	for _, phase := range out.Data.SetFlowPhaseStatus.Flow.Phases {
+		if phase.PhaseID == "plan" {
+			flowPhaseRuntimeJob = phase.ActiveRuntimeJob
+		}
+	}
+	assertGraphQLRuntimeJob(t, flowPhaseRuntimeJob, graphQLRuntimeJob{
+		ID:      "job-plan",
+		PhaseID: "plan",
+		Status:  "running",
+	})
+}
+
 func TestHandlerGraphQLSetFlowPhaseStatusIgnoresRuntimeLookupFailureAfterPersist(t *testing.T) {
 	store, _ := newFlowGraphQLStore(t)
 	record := createGraphQLFlow(t, store, flowstore.FlowRecord{
@@ -710,6 +770,21 @@ func newFlowGraphQLHandlerWithRuntime(t *testing.T, reader server.FlowStore, run
 	return handler
 }
 
+type staticRuntimeJobLookup struct {
+	job *flowquery.RuntimeJob
+}
+
+func (lookup staticRuntimeJobLookup) RuntimeStateKnown() bool {
+	return true
+}
+
+func (lookup staticRuntimeJobLookup) ActiveRuntimeJob(_ flowstore.FlowRecord, phase flowstore.FlowPhase) (*flowquery.RuntimeJob, error) {
+	if lookup.job != nil && lookup.job.PhaseID == phase.PhaseID {
+		return lookup.job, nil
+	}
+	return nil, nil
+}
+
 type failingRuntimeJobLookup struct{}
 
 func (failingRuntimeJobLookup) RuntimeStateKnown() bool {
@@ -756,6 +831,22 @@ type graphQLPhase struct {
 	Outcome   string `json:"outcome"`
 	Notes     string `json:"notes"`
 	Summary   string `json:"summary"`
+}
+
+type graphQLRuntimeJob struct {
+	ID      string `json:"id"`
+	PhaseID string `json:"phaseId"`
+	Status  string `json:"status"`
+}
+
+func assertGraphQLRuntimeJob(t *testing.T, got *graphQLRuntimeJob, want graphQLRuntimeJob) {
+	t.Helper()
+	if got == nil {
+		t.Fatalf("runtime job is nil, want %#v", want)
+	}
+	if *got != want {
+		t.Fatalf("runtime job = %#v, want %#v", *got, want)
+	}
 }
 
 func mustSetGraphQLPhase(t *testing.T, store *flowstore.Store, record flowstore.FlowRecord, update flowstore.PhaseUpdate) flowstore.FlowRecord {
