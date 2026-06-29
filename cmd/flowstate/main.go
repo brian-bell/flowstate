@@ -293,10 +293,11 @@ func runServe(args []string, deps runDeps) error {
 
 const serveHelpText = `Usage: flowstate serve [--listen host:port]
 
-Start the secure local HTTP server. The listen host must be localhost or a literal loopback IP.
+Start the secure local HTTP server. The listen target must be localhost, a literal loopback IP, or tailscale:PORT.
+tailscale:PORT resolves to an up Tailnet address before binding and fails when no Tailscale address is available.
 
 Flags:
-  --listen  Local listen address. Default: 127.0.0.1:0
+  --listen  Local or Tailnet listen target. Default: 127.0.0.1:0
   --help    Print this help and exit.
 `
 

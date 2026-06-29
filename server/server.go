@@ -37,6 +37,7 @@ type HandlerOptions struct {
 	Token          string
 	ListenerHost   string
 	ListenerPort   string
+	Scope          ListenerScope
 	AllowIPv6Alias bool
 	FlowReader     FlowReader
 	RuntimeJobs    flowquery.RuntimeJobLookup
@@ -51,6 +52,9 @@ type Options struct {
 	RuntimeJobs flowquery.RuntimeJobLookup
 	Stdout      io.Writer
 	Started     chan<- Started
+
+	resolve ListenResolveOptions
+	listen  func(network string, address string) (net.Listener, error)
 }
 
 type FlowReader interface {
@@ -64,11 +68,8 @@ type Started struct {
 }
 
 func Run(ctx context.Context, opts Options) error {
-	listen := opts.Listen
-	if listen == "" {
-		listen = "127.0.0.1:0"
-	}
-	if err := ValidateListenAddress(listen); err != nil {
+	resolvedListen, err := ResolveListenAddress(opts.Listen, opts.resolve)
+	if err != nil {
 		return err
 	}
 	token := opts.Token
@@ -84,13 +85,17 @@ func Run(ctx context.Context, opts Options) error {
 		return err
 	}
 
-	listener, err := net.Listen("tcp", listen)
+	listen := net.Listen
+	if opts.listen != nil {
+		listen = opts.listen
+	}
+	listener, err := listen("tcp", resolvedListen.Listen)
 	if err != nil {
 		return err
 	}
 	defer listener.Close()
 
-	listenerHost, listenerPort, err := validatedListenerAddr(listener.Addr())
+	listenerHost, listenerPort, err := validatedListenerAddr(listener.Addr(), resolvedListen)
 	if err != nil {
 		return err
 	}
@@ -98,7 +103,8 @@ func Run(ctx context.Context, opts Options) error {
 		Token:          token,
 		ListenerHost:   listenerHost,
 		ListenerPort:   listenerPort,
-		AllowIPv6Alias: listenerHost == "::1",
+		Scope:          resolvedListen.Scope,
+		AllowIPv6Alias: resolvedListen.Scope == ListenerScopeLoopback && listenerHost == "::1",
 		FlowReader:     flowReader,
 		RuntimeJobs:    opts.RuntimeJobs,
 	})
@@ -270,51 +276,57 @@ func generateToken() (string, error) {
 }
 
 func ValidateListenAddress(listen string) error {
-	host, port, err := net.SplitHostPort(listen)
-	if err != nil || host == "" || port == "" {
+	if listen == "" {
 		return invalidListenAddress(listen)
 	}
-	portNumber, err := strconv.Atoi(port)
-	if err != nil || portNumber < 0 || portNumber > 65535 {
-		return invalidListenAddress(listen)
-	}
-	if host == "localhost" {
-		return nil
-	}
-	if strings.Contains(host, "%") {
-		return invalidListenAddress(listen)
-	}
-	addr, err := netip.ParseAddr(host)
-	if err != nil || !addr.IsLoopback() || addr.Is4In6() {
-		return invalidListenAddress(listen)
-	}
-	return nil
+	_, err := parseListenTarget(listen)
+	return err
 }
 
 func invalidListenAddress(listen string) error {
-	return fmt.Errorf("listen address must be host:port with host localhost or a loopback IP: %q", listen)
+	return fmt.Errorf("listen address must be host:port with host localhost, a loopback IP, or tailscale:PORT: %q", listen)
 }
 
-func validatedListenerAddr(addr net.Addr) (string, string, error) {
+func validatedListenerAddr(addr net.Addr, resolved ResolvedListen) (string, string, error) {
+	if resolved.Scope == "" {
+		resolved.Scope = ListenerScopeLoopback
+	}
 	if tcpAddr, ok := addr.(*net.TCPAddr); ok {
-		if tcpAddr.IP == nil || !tcpAddr.IP.IsLoopback() {
-			return "", "", fmt.Errorf("listener bound to non-loopback address %q", addr.String())
-		}
 		if tcpAddr.Port < 0 || tcpAddr.Port > 65535 {
 			return "", "", fmt.Errorf("listener bound to invalid port %d", tcpAddr.Port)
 		}
-		return tcpAddr.IP.String(), strconv.Itoa(tcpAddr.Port), nil
+		host := ""
+		if tcpAddr.IP != nil {
+			host = tcpAddr.IP.String()
+		}
+		if err := validateListenerHost(host, addr.String(), resolved); err != nil {
+			return "", "", err
+		}
+		return host, strconv.Itoa(tcpAddr.Port), nil
 	}
 
 	host, port, err := net.SplitHostPort(addr.String())
 	if err != nil {
 		return "", "", fmt.Errorf("listener bound to invalid address %q", addr.String())
 	}
-	parsed, err := netip.ParseAddr(host)
-	if err != nil || !parsed.IsLoopback() {
-		return "", "", fmt.Errorf("listener bound to non-loopback address %q", addr.String())
+	if err := validateListenerHost(host, addr.String(), resolved); err != nil {
+		return "", "", err
 	}
 	return host, port, nil
+}
+
+func validateListenerHost(host string, display string, resolved ResolvedListen) error {
+	if resolved.Scope == ListenerScopeTailscale {
+		if host != resolved.Host {
+			return fmt.Errorf("listener bound to unexpected Tailscale address %q; want %q", display, resolved.Host)
+		}
+		return nil
+	}
+	parsed, err := netip.ParseAddr(host)
+	if err != nil || !parsed.IsLoopback() {
+		return fmt.Errorf("listener bound to non-loopback address %q", display)
+	}
+	return nil
 }
 
 func allowGetOrHead(w http.ResponseWriter, r *http.Request) bool {
@@ -379,6 +391,9 @@ func isAllowedOrigin(origin string, port string, allowedHosts map[string]bool) b
 }
 
 func allowedLoopbackHosts(opts HandlerOptions) map[string]bool {
+	if opts.Scope == ListenerScopeTailscale {
+		return map[string]bool{opts.ListenerHost: true}
+	}
 	allowedHosts := map[string]bool{
 		"localhost":       true,
 		"127.0.0.1":       true,

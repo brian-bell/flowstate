@@ -311,6 +311,77 @@ func TestHandlerValidatesHost(t *testing.T) {
 	}
 }
 
+func TestHandlerValidatesTailscaleHost(t *testing.T) {
+	handler, err := server.NewHandler(server.HandlerOptions{
+		Token:        "test-token",
+		ListenerHost: "100.88.77.66",
+		ListenerPort: "4321",
+		Scope:        server.ListenerScopeTailscale,
+	})
+	if err != nil {
+		t.Fatalf("NewHandler returned error: %v", err)
+	}
+
+	for _, host := range []string{"100.88.77.66:4321"} {
+		t.Run("accepts "+host, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "http://100.88.77.66:4321/healthz", nil)
+			req.Host = host
+			res := httptest.NewRecorder()
+			handler.ServeHTTP(res, req)
+
+			if res.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body %q", res.Code, res.Body.String())
+			}
+		})
+	}
+
+	for _, host := range []string{
+		"localhost:4321",
+		"127.0.0.1:4321",
+		"100.88.77.66:9999",
+		"100.88.77.67:4321",
+	} {
+		t.Run("rejects "+host, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "http://100.88.77.66:4321/healthz", nil)
+			req.Host = host
+			res := httptest.NewRecorder()
+			handler.ServeHTTP(res, req)
+
+			if res.Code != http.StatusForbidden {
+				t.Fatalf("status = %d, want 403; body %q", res.Code, res.Body.String())
+			}
+		})
+	}
+}
+
+func TestHandlerValidatesIPv6TailscaleHost(t *testing.T) {
+	handler, err := server.NewHandler(server.HandlerOptions{
+		Token:        "test-token",
+		ListenerHost: "fd7a:115c:a1e0::1234",
+		ListenerPort: "4321",
+		Scope:        server.ListenerScopeTailscale,
+	})
+	if err != nil {
+		t.Fatalf("NewHandler returned error: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "http://[fd7a:115c:a1e0::1234]:4321/healthz", nil)
+	req.Host = "[fd7a:115c:a1e0::1234]:4321"
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body %q", res.Code, res.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "http://[fd7a:115c:a1e0::1234]:4321/healthz", nil)
+	req.Host = "[fd7a:115c:a1e0::1234]:9999"
+	res = httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusForbidden {
+		t.Fatalf("wrong-port status = %d, want 403; body %q", res.Code, res.Body.String())
+	}
+}
+
 func TestHandlerValidatesOrigin(t *testing.T) {
 	handler, err := server.NewHandler(server.HandlerOptions{
 		Token:          "test-token",
@@ -356,6 +427,82 @@ func TestHandlerValidatesOrigin(t *testing.T) {
 				t.Fatalf("status = %d, want 403; body %q", res.Code, res.Body.String())
 			}
 		})
+	}
+}
+
+func TestHandlerValidatesTailscaleOrigin(t *testing.T) {
+	handler, err := server.NewHandler(server.HandlerOptions{
+		Token:        "test-token",
+		ListenerHost: "100.88.77.66",
+		ListenerPort: "4321",
+		Scope:        server.ListenerScopeTailscale,
+	})
+	if err != nil {
+		t.Fatalf("NewHandler returned error: %v", err)
+	}
+
+	for _, origin := range []string{"", "http://100.88.77.66:4321"} {
+		t.Run("accepts "+origin, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "http://100.88.77.66:4321/healthz", nil)
+			req.Host = "100.88.77.66:4321"
+			if origin != "" {
+				req.Header.Set("Origin", origin)
+			}
+			res := httptest.NewRecorder()
+			handler.ServeHTTP(res, req)
+
+			if res.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body %q", res.Code, res.Body.String())
+			}
+		})
+	}
+
+	for _, origin := range []string{
+		"http://localhost:4321",
+		"http://127.0.0.1:4321",
+		"http://100.88.77.66:9999",
+	} {
+		t.Run("rejects "+origin, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "http://100.88.77.66:4321/healthz", nil)
+			req.Host = "100.88.77.66:4321"
+			req.Header.Set("Origin", origin)
+			res := httptest.NewRecorder()
+			handler.ServeHTTP(res, req)
+
+			if res.Code != http.StatusForbidden {
+				t.Fatalf("status = %d, want 403; body %q", res.Code, res.Body.String())
+			}
+		})
+	}
+}
+
+func TestHandlerValidatesIPv6TailscaleOrigin(t *testing.T) {
+	handler, err := server.NewHandler(server.HandlerOptions{
+		Token:        "test-token",
+		ListenerHost: "fd7a:115c:a1e0::1234",
+		ListenerPort: "4321",
+		Scope:        server.ListenerScopeTailscale,
+	})
+	if err != nil {
+		t.Fatalf("NewHandler returned error: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "http://[fd7a:115c:a1e0::1234]:4321/healthz", nil)
+	req.Host = "[fd7a:115c:a1e0::1234]:4321"
+	req.Header.Set("Origin", "http://[fd7a:115c:a1e0::1234]:4321")
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body %q", res.Code, res.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "http://[fd7a:115c:a1e0::1234]:4321/healthz", nil)
+	req.Host = "[fd7a:115c:a1e0::1234]:4321"
+	req.Header.Set("Origin", "http://[fd7a:115c:a1e0::1234]:9999")
+	res = httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusForbidden {
+		t.Fatalf("wrong-port status = %d, want 403; body %q", res.Code, res.Body.String())
 	}
 }
 

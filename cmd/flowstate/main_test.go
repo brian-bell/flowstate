@@ -232,8 +232,8 @@ func TestRunServeStateRootUsesFlowPlanSessionConfigPrecedence(t *testing.T) {
 	}
 }
 
-func TestRunServeAcceptsOnlyExplicitLoopbackListenAddresses(t *testing.T) {
-	for _, listen := range []string{"localhost:8080", "127.0.0.1:0", "[::1]:8080"} {
+func TestRunServeAcceptsOnlyExplicitLoopbackAndTailscaleListenTargets(t *testing.T) {
+	for _, listen := range []string{"localhost:8080", "127.0.0.1:0", "[::1]:8080", "tailscale:8080"} {
 		t.Run("accepts "+listen, func(t *testing.T) {
 			called := false
 			err := run([]string{"wtui", "serve", "--listen", listen}, runDeps{
@@ -259,6 +259,7 @@ func TestRunServeAcceptsOnlyExplicitLoopbackListenAddresses(t *testing.T) {
 	}
 
 	rejected := []string{
+		"",
 		"0.0.0.0:8080",
 		":8080",
 		"[::]:8080",
@@ -281,7 +282,7 @@ func TestRunServeAcceptsOnlyExplicitLoopbackListenAddresses(t *testing.T) {
 			if err == nil {
 				t.Fatal("expected listen validation error")
 			}
-			if !strings.Contains(err.Error(), "listen address must be host:port with host localhost or a loopback IP") {
+			if !strings.Contains(err.Error(), "listen address must be host:port with host localhost, a loopback IP, or tailscale:PORT") {
 				t.Fatalf("unexpected error: %v", err)
 			}
 		})
@@ -307,6 +308,7 @@ func TestRunServeHelpBypassesServer(t *testing.T) {
 	requireContainsAll(t, stdout.String(), []string{
 		"Usage: flowstate serve [--listen host:port]",
 		"--listen",
+		"tailscale:PORT",
 		"127.0.0.1:0",
 	})
 }
@@ -330,6 +332,7 @@ func TestRunServeHelpAfterFlagsBypassesServer(t *testing.T) {
 	requireContainsAll(t, stdout.String(), []string{
 		"Usage: flowstate serve [--listen host:port]",
 		"--listen",
+		"tailscale:PORT",
 		"127.0.0.1:0",
 	})
 }
