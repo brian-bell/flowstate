@@ -19,8 +19,8 @@ route timestamp for a clean repeatable build, and then compiles the Go binary.
 The embedded assets under `server/webassets/dist/` are checked in; `web/dist/`
 is ignored and can be removed with `make clean`.
 
-CI requires a clean `gofmt -l .`, `make test`, and `make build` before changes
-land.
+CI requires a clean `gofmt -l .`, `make test`, `make build`, and unchanged
+embedded assets after the build before changes land.
 
 ## Optional: tagged release archives
 
