@@ -18,7 +18,7 @@ type Mutation {
 input SetFlowPhaseStatusInput {
   flowId: ID!
   phaseId: ID!
-  status: FlowPhaseStatus!
+  status: FlowPhaseStatusInput!
   outcome: String
   notes: String
   summary: String
@@ -42,6 +42,14 @@ enum FlowStatus {
 enum FlowPhaseStatus {
   PENDING
   READY
+  RUNNING
+  NEEDS_ATTENTION
+  COMPLETED
+  BLOCKED
+  SKIPPED
+}
+
+enum FlowPhaseStatusInput {
   RUNNING
   NEEDS_ATTENTION
   COMPLETED

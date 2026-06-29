@@ -598,7 +598,7 @@ type Mutation {
 input SetFlowPhaseStatusInput {
   flowId: ID!
   phaseId: ID!
-  status: FlowPhaseStatus!
+  status: FlowPhaseStatusInput!
   outcome: String
   notes: String
   summary: String
@@ -622,6 +622,14 @@ enum FlowStatus {
 enum FlowPhaseStatus {
   PENDING
   READY
+  RUNNING
+  NEEDS_ATTENTION
+  COMPLETED
+  BLOCKED
+  SKIPPED
+}
+
+enum FlowPhaseStatusInput {
   RUNNING
   NEEDS_ATTENTION
   COMPLETED
@@ -3610,7 +3618,7 @@ func (ec *executionContext) unmarshalInputSetFlowPhaseStatusInput(ctx context.Co
 			it.PhaseID = data
 		case "status":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("status"))
-			data, err := ec.unmarshalNFlowPhaseStatus2githubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐFlowPhaseStatus(ctx, v)
+			data, err := ec.unmarshalNFlowPhaseStatusInput2githubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐFlowPhaseStatusInput(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -4765,6 +4773,16 @@ func (ec *executionContext) marshalNFlowPhaseStatus2ᚕgithubᚗcomᚋbrianᚑbe
 	}
 
 	return ret
+}
+
+func (ec *executionContext) unmarshalNFlowPhaseStatusInput2githubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐFlowPhaseStatusInput(ctx context.Context, v any) (model.FlowPhaseStatusInput, error) {
+	var res model.FlowPhaseStatusInput
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNFlowPhaseStatusInput2githubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐFlowPhaseStatusInput(ctx context.Context, sel ast.SelectionSet, v model.FlowPhaseStatusInput) graphql.Marshaler {
+	return v
 }
 
 func (ec *executionContext) unmarshalNFlowStatus2githubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐFlowStatus(ctx context.Context, v any) (model.FlowStatus, error) {

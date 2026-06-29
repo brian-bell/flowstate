@@ -3,6 +3,7 @@ package server_test
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"github.com/brian-bell/flowstate/flowstore"
 	"github.com/brian-bell/flowstate/planstore"
 	"github.com/brian-bell/flowstate/server"
+	"github.com/brian-bell/flowstate/server/flowquery"
 )
 
 func TestHandlerGraphQLListsFlowsWithFilteringAndComputedFields(t *testing.T) {
@@ -406,6 +408,10 @@ func TestHandlerGraphQLSetFlowPhaseStatusUsesRecoveryRestartRules(t *testing.T) 
 		Outcome: "needs_attention",
 		Notes:   "Needs another planning pass.",
 	})
+	beforeRejectedComplete, err := store.Read(record.FlowID)
+	if err != nil {
+		t.Fatalf("Read() before rejected complete = %v", err)
+	}
 	handler := newFlowGraphQLHandler(t, store)
 
 	var completeOut setPhaseResponse
@@ -418,7 +424,18 @@ func TestHandlerGraphQLSetFlowPhaseStatusUsesRecoveryRestartRules(t *testing.T) 
 		!graphQLErrorsContain(completeOut.Errors, "restart with --status running --notes before completing") {
 		t.Fatalf("GraphQL errors = %#v, want recovery completion guidance", completeOut.Errors)
 	}
+	afterRejectedComplete, err := store.Read(record.FlowID)
+	if err != nil {
+		t.Fatalf("Read() after rejected complete = %v", err)
+	}
+	if !reflect.DeepEqual(beforeRejectedComplete, afterRejectedComplete) {
+		t.Fatalf("record changed after rejected recovery completion\nbefore: %#v\nafter:  %#v", beforeRejectedComplete, afterRejectedComplete)
+	}
 
+	beforeRejectedRestart, err := store.Read(record.FlowID)
+	if err != nil {
+		t.Fatalf("Read() before rejected restart = %v", err)
+	}
 	var restartWithoutNotes setPhaseResponse
 	postGraphQL(t, handler, setFlowPhaseStatusMutation, map[string]any{"input": map[string]any{
 		"flowId":  record.FlowID,
@@ -427,6 +444,13 @@ func TestHandlerGraphQLSetFlowPhaseStatusUsesRecoveryRestartRules(t *testing.T) 
 	}}, &restartWithoutNotes)
 	if !graphQLErrorsContain(restartWithoutNotes.Errors, "restarting needs_attention phase requires notes") {
 		t.Fatalf("GraphQL errors = %#v, want restart notes validation", restartWithoutNotes.Errors)
+	}
+	afterRejectedRestart, err := store.Read(record.FlowID)
+	if err != nil {
+		t.Fatalf("Read() after rejected restart = %v", err)
+	}
+	if !reflect.DeepEqual(beforeRejectedRestart, afterRejectedRestart) {
+		t.Fatalf("record changed after rejected recovery restart\nbefore: %#v\nafter:  %#v", beforeRejectedRestart, afterRejectedRestart)
 	}
 
 	var restart setPhaseResponse
@@ -462,7 +486,7 @@ func TestHandlerGraphQLSetFlowPhaseStatusUsesRecoveryRestartRules(t *testing.T) 
 	}
 }
 
-func TestHandlerGraphQLSetFlowPhaseStatusHandlesEnumValidationAndStoreSettableValidation(t *testing.T) {
+func TestHandlerGraphQLSetFlowPhaseStatusHandlesInputEnumValidation(t *testing.T) {
 	store, _ := newFlowGraphQLStore(t)
 	record := createGraphQLFlow(t, store, flowstore.FlowRecord{
 		FlowID:       "enum-flow",
@@ -472,48 +496,82 @@ func TestHandlerGraphQLSetFlowPhaseStatusHandlesEnumValidationAndStoreSettableVa
 	})
 	handler := newFlowGraphQLHandler(t, store)
 
-	var invalidEnum struct {
-		Data   any   `json:"data"`
-		Errors []any `json:"errors"`
-	}
-	postGraphQLWithStatus(t, handler, http.StatusUnprocessableEntity, setFlowPhaseStatusMutation, map[string]any{"input": map[string]any{
-		"flowId":  record.FlowID,
-		"phaseId": "plan",
-		"status":  "NOT_A_STATUS",
-	}}, &invalidEnum)
-	if len(invalidEnum.Errors) == 0 {
-		t.Fatalf("invalid enum response had no errors: %#v", invalidEnum)
-	}
-
-	for _, tc := range []struct {
-		status string
-		want   string
-	}{
-		{status: "READY", want: "cannot set phase status to ready; readiness is derived"},
-		{status: "PENDING", want: `invalid phase status "pending"`},
-	} {
-		t.Run(tc.status, func(t *testing.T) {
+	for _, status := range []string{"NOT_A_STATUS", "READY", "PENDING"} {
+		t.Run(status, func(t *testing.T) {
 			before, err := store.Read(record.FlowID)
 			if err != nil {
 				t.Fatalf("Read() error = %v", err)
 			}
-			var out setPhaseResponse
-			postGraphQL(t, handler, setFlowPhaseStatusMutation, map[string]any{"input": map[string]any{
+			var out struct {
+				Data   any   `json:"data"`
+				Errors []any `json:"errors"`
+			}
+			postGraphQLWithStatus(t, handler, http.StatusUnprocessableEntity, setFlowPhaseStatusMutation, map[string]any{"input": map[string]any{
 				"flowId":  record.FlowID,
 				"phaseId": "plan",
-				"status":  tc.status,
+				"status":  status,
 			}}, &out)
-			if !graphQLErrorsContain(out.Errors, tc.want) {
-				t.Fatalf("GraphQL errors = %#v, want %q", out.Errors, tc.want)
+			if len(out.Errors) == 0 {
+				t.Fatalf("invalid enum response had no errors: %#v", out)
 			}
 			after, err := store.Read(record.FlowID)
 			if err != nil {
-				t.Fatalf("Read() after %s = %v", tc.status, err)
+				t.Fatalf("Read() after %s = %v", status, err)
 			}
 			if !reflect.DeepEqual(before, after) {
-				t.Fatalf("record changed after rejected %s mutation", tc.status)
+				t.Fatalf("record changed after rejected %s mutation", status)
 			}
 		})
+	}
+}
+
+func TestHandlerGraphQLSetFlowPhaseStatusIgnoresRuntimeLookupFailureAfterPersist(t *testing.T) {
+	store, _ := newFlowGraphQLStore(t)
+	record := createGraphQLFlow(t, store, flowstore.FlowRecord{
+		FlowID:       "runtime-failure-flow",
+		Title:        "Runtime Failure Flow",
+		Instructions: "return persisted mutation result even if runtime visibility fails",
+		RepoPath:     t.TempDir(),
+	})
+	handler := newFlowGraphQLHandlerWithRuntime(t, store, failingRuntimeJobLookup{})
+
+	var out struct {
+		Data struct {
+			SetFlowPhaseStatus struct {
+				Flow struct {
+					Phases []struct {
+						PhaseID          string `json:"phaseId"`
+						StatusRaw        string `json:"statusRaw"`
+						ActiveRuntimeJob any    `json:"activeRuntimeJob"`
+					} `json:"phases"`
+				} `json:"flow"`
+				Phase graphQLPhase `json:"phase"`
+			} `json:"setFlowPhaseStatus"`
+		} `json:"data"`
+		Errors []any `json:"errors"`
+	}
+	postGraphQL(t, handler, `mutation($input: SetFlowPhaseStatusInput!) {
+		setFlowPhaseStatus(input: $input) {
+			flow { phases { phaseId statusRaw activeRuntimeJob { id } } }
+			phase { phaseId statusRaw outcome notes summary }
+		}
+	}`, map[string]any{"input": map[string]any{
+		"flowId":  record.FlowID,
+		"phaseId": "plan",
+		"status":  "COMPLETED",
+	}}, &out)
+	if len(out.Errors) != 0 {
+		t.Fatalf("GraphQL errors: %#v", out.Errors)
+	}
+	if out.Data.SetFlowPhaseStatus.Phase.StatusRaw != flowstore.PhaseCompleted {
+		t.Fatalf("payload phase = %#v, want completed", out.Data.SetFlowPhaseStatus.Phase)
+	}
+	read, err := store.Read(record.FlowID)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if phase := graphQLPhaseByID(t, read, "plan"); phase.Status != flowstore.PhaseCompleted {
+		t.Fatalf("persisted plan phase = %#v, want completed", phase)
 	}
 }
 
@@ -634,16 +692,32 @@ func newFlowGraphQLStore(t *testing.T) (*flowstore.Store, string) {
 
 func newFlowGraphQLHandler(t *testing.T, reader server.FlowStore) http.Handler {
 	t.Helper()
+	return newFlowGraphQLHandlerWithRuntime(t, reader, nil)
+}
+
+func newFlowGraphQLHandlerWithRuntime(t *testing.T, reader server.FlowStore, runtimeJobs flowquery.RuntimeJobLookup) http.Handler {
+	t.Helper()
 	handler, err := server.NewHandler(server.HandlerOptions{
 		Token:        "test-token",
 		ListenerHost: "127.0.0.1",
 		ListenerPort: "4321",
 		FlowStore:    reader,
+		RuntimeJobs:  runtimeJobs,
 	})
 	if err != nil {
 		t.Fatalf("NewHandler: %v", err)
 	}
 	return handler
+}
+
+type failingRuntimeJobLookup struct{}
+
+func (failingRuntimeJobLookup) RuntimeStateKnown() bool {
+	return true
+}
+
+func (failingRuntimeJobLookup) ActiveRuntimeJob(flowstore.FlowRecord, flowstore.FlowPhase) (*flowquery.RuntimeJob, error) {
+	return nil, errors.New("runtime lookup failed")
 }
 
 const setFlowPhaseStatusMutation = `mutation($input: SetFlowPhaseStatusInput!) {

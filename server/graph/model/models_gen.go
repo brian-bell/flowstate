@@ -80,12 +80,12 @@ type RuntimeJob struct {
 }
 
 type SetFlowPhaseStatusInput struct {
-	FlowID  string          `json:"flowId"`
-	PhaseID string          `json:"phaseId"`
-	Status  FlowPhaseStatus `json:"status"`
-	Outcome *string         `json:"outcome,omitempty"`
-	Notes   *string         `json:"notes,omitempty"`
-	Summary *string         `json:"summary,omitempty"`
+	FlowID  string               `json:"flowId"`
+	PhaseID string               `json:"phaseId"`
+	Status  FlowPhaseStatusInput `json:"status"`
+	Outcome *string              `json:"outcome,omitempty"`
+	Notes   *string              `json:"notes,omitempty"`
+	Summary *string              `json:"summary,omitempty"`
 }
 
 type SetFlowPhaseStatusPayload struct {
@@ -210,6 +210,67 @@ func (e *FlowPhaseStatus) UnmarshalJSON(b []byte) error {
 }
 
 func (e FlowPhaseStatus) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type FlowPhaseStatusInput string
+
+const (
+	FlowPhaseStatusInputRunning        FlowPhaseStatusInput = "RUNNING"
+	FlowPhaseStatusInputNeedsAttention FlowPhaseStatusInput = "NEEDS_ATTENTION"
+	FlowPhaseStatusInputCompleted      FlowPhaseStatusInput = "COMPLETED"
+	FlowPhaseStatusInputBlocked        FlowPhaseStatusInput = "BLOCKED"
+	FlowPhaseStatusInputSkipped        FlowPhaseStatusInput = "SKIPPED"
+)
+
+var AllFlowPhaseStatusInput = []FlowPhaseStatusInput{
+	FlowPhaseStatusInputRunning,
+	FlowPhaseStatusInputNeedsAttention,
+	FlowPhaseStatusInputCompleted,
+	FlowPhaseStatusInputBlocked,
+	FlowPhaseStatusInputSkipped,
+}
+
+func (e FlowPhaseStatusInput) IsValid() bool {
+	switch e {
+	case FlowPhaseStatusInputRunning, FlowPhaseStatusInputNeedsAttention, FlowPhaseStatusInputCompleted, FlowPhaseStatusInputBlocked, FlowPhaseStatusInputSkipped:
+		return true
+	}
+	return false
+}
+
+func (e FlowPhaseStatusInput) String() string {
+	return string(e)
+}
+
+func (e *FlowPhaseStatusInput) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = FlowPhaseStatusInput(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid FlowPhaseStatusInput", str)
+	}
+	return nil
+}
+
+func (e FlowPhaseStatusInput) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *FlowPhaseStatusInput) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e FlowPhaseStatusInput) MarshalJSON() ([]byte, error) {
 	var buf bytes.Buffer
 	e.MarshalGQL(&buf)
 	return buf.Bytes(), nil

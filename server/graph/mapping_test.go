@@ -8,15 +8,12 @@ import (
 )
 
 func TestFlowPhaseStatusInputToStoreMapsEveryGeneratedEnum(t *testing.T) {
-	for _, status := range model.AllFlowPhaseStatus {
+	for _, status := range model.AllFlowPhaseStatusInput {
 		if got := flowPhaseStatusInputToStore(status); got == "" {
 			t.Fatalf("flowPhaseStatusInputToStore(%s) = empty string", status)
 		}
 	}
-	if got := flowPhaseStatusInputToStore(model.FlowPhaseStatusReady); got != flowstore.PhaseReady {
-		t.Fatalf("READY maps to %q, want store ready so SetPhase rejects it", got)
-	}
-	if got := flowPhaseStatusInputToStore(model.FlowPhaseStatusPending); got != flowstore.PhasePending {
-		t.Fatalf("PENDING maps to %q, want store pending so SetPhase rejects it", got)
+	if len(model.AllFlowPhaseStatusInput) != len(flowstore.AgentSettablePhaseStatuses()) {
+		t.Fatalf("FlowPhaseStatusInput enum count = %d, want %d", len(model.AllFlowPhaseStatusInput), len(flowstore.AgentSettablePhaseStatuses()))
 	}
 }

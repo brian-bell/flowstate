@@ -141,21 +141,17 @@ func flowStatusToGraphQL(status string) *model.FlowStatus {
 	return &mapped
 }
 
-func flowPhaseStatusInputToStore(status model.FlowPhaseStatus) string {
+func flowPhaseStatusInputToStore(status model.FlowPhaseStatusInput) string {
 	switch status {
-	case model.FlowPhaseStatusPending:
-		return flowstore.PhasePending
-	case model.FlowPhaseStatusReady:
-		return flowstore.PhaseReady
-	case model.FlowPhaseStatusRunning:
+	case model.FlowPhaseStatusInputRunning:
 		return flowstore.PhaseRunning
-	case model.FlowPhaseStatusNeedsAttention:
+	case model.FlowPhaseStatusInputNeedsAttention:
 		return flowstore.PhaseNeedsAttention
-	case model.FlowPhaseStatusCompleted:
+	case model.FlowPhaseStatusInputCompleted:
 		return flowstore.PhaseCompleted
-	case model.FlowPhaseStatusBlocked:
+	case model.FlowPhaseStatusInputBlocked:
 		return flowstore.PhaseBlocked
-	case model.FlowPhaseStatusSkipped:
+	case model.FlowPhaseStatusInputSkipped:
 		return flowstore.PhaseSkipped
 	default:
 		return ""

@@ -40,10 +40,7 @@ func (r *mutationResolver) SetFlowPhaseStatus(ctx context.Context, input model.S
 	if err != nil {
 		return nil, fmt.Errorf("set flow phase status %q/%q: %w", input.FlowID, input.PhaseID, err)
 	}
-	view, err := flowquery.BuildWithRuntime(record, r.RuntimeJobs)
-	if err != nil {
-		return nil, err
-	}
+	view := flowquery.Build(record)
 	phaseID := artifacts.NormalizePhaseID(input.PhaseID)
 	for _, phase := range view.Phases {
 		if artifacts.NormalizePhaseID(phase.PhaseID) == phaseID {
