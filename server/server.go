@@ -164,6 +164,9 @@ func generateToken() (string, error) {
 }
 
 func ValidateListenAddress(listen string) error {
+	if listen == "" {
+		return invalidListenAddress(listen)
+	}
 	_, err := parseListenTarget(listen)
 	return err
 }

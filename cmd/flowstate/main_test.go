@@ -213,6 +213,7 @@ func TestRunServeAcceptsOnlyExplicitLoopbackAndTailscaleListenTargets(t *testing
 	}
 
 	rejected := []string{
+		"",
 		"0.0.0.0:8080",
 		":8080",
 		"[::]:8080",
