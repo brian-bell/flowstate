@@ -2,14 +2,21 @@
 
 flowstate is distributed as a source build: clone the repository and run `make
 build` to produce `bin/flowstate`. There is no hosted package channel in this
-fork.
+fork. Source builds require Go plus Node.js/pnpm for the embedded web shell.
 
 ## Build from source
 
 ```bash
+corepack enable # or install pnpm directly
 make build      # produces bin/flowstate
 ./bin/flowstate --version
 ```
+
+`make build` runs the TanStack Start build in `web/`, verifies the configured
+SPA shell at `web/dist/client/_shell.html`, copies the static client output into
+`server/webassets/dist/`, and then compiles the Go binary. The embedded assets
+under `server/webassets/dist/` are checked in; `web/dist/` is ignored and can be
+removed with `make clean`.
 
 CI requires a clean `gofmt -l .`, `make test`, and `make build` before changes
 land.
