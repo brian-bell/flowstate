@@ -605,19 +605,31 @@ provider-native `raw.jsonl` alongside normalized transcript events.
 ## Development
 
 ```bash
-make build   # Build binary to bin/flowstate
+make build   # Build web assets, then build binary to bin/flowstate
 make test    # Run all tests
 make run     # Build and run with optional ignored repo-local .config/
+make web-dev # Run the TanStack Start dev server for frontend iteration
 make tidy    # go mod tidy
-make clean   # Remove bin/
+make clean   # Remove bin/ and web/dist
 ```
 
-CI requires a clean `gofmt -l .`, `make test`, and `make build`.
+`make build` requires pnpm. Use Corepack (`corepack enable`) or install pnpm
+directly, then run `make build`. The build runs `pnpm --dir web install
+--frozen-lockfile`, typechecks the frontend, builds the TanStack Start SPA,
+verifies `web/dist/client/_shell.html`, copies `web/dist/client/` into
+`server/webassets/dist/`, normalizes generated shell timestamps, and then
+compiles the Go binary. The copied embedded assets are intentionally checked in
+so Go-only test runs work from a clean checkout; `web/dist/` and
+`web/node_modules/` remain ignored.
+
+CI requires a clean `gofmt -l .`, `make test`, `make build`, and unchanged
+embedded assets after the build.
 
 ## Requirements
 
 - Go 1.26+
 - Git 2.15+ (worktree support)
+- Node.js and pnpm for `make build`, `make web-build`, and `make web-dev`
 - macOS clipboard: `pbcopy` (included with macOS)
 - Linux clipboard: install one of `wl-copy`, `xclip`, or `xsel`
 - Linux terminal launch: set `TERMINAL` to your terminal emulator; when no

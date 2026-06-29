@@ -10,6 +10,7 @@ import (
 	"github.com/brian-bell/flowstate/agent"
 	"github.com/brian-bell/flowstate/flowstore"
 	"github.com/brian-bell/flowstate/internal/artifacts"
+	"github.com/brian-bell/flowstate/server/flowquery"
 	"github.com/brian-bell/flowstate/ui"
 )
 
@@ -501,13 +502,7 @@ func (m Model) prepareDeferredAutoFlowPhaseLaunches() (Model, tea.Cmd) {
 }
 
 func flowPhaseCanLaunch(record flowstore.FlowRecord, phase flowstore.FlowPhase) bool {
-	if phase.Status == flowstore.PhaseReady {
-		return true
-	}
-	return artifacts.NormalizePhaseID(phase.PhaseID) == "autoreview" &&
-		(phase.Status == flowstore.PhaseNeedsAttention || phase.Status == flowstore.PhaseBlocked) &&
-		flowstore.HasPRTarget(record.PR) &&
-		flowstore.PhasePredecessorsSatisfied(record, phase.PhaseID)
+	return flowquery.PhaseCanLaunch(record, phase)
 }
 
 func flowPhaseStatusDetail(phase flowstore.FlowPhase) string {
