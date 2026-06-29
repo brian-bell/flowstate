@@ -346,6 +346,28 @@ func TestHandlerGraphQLCreateFlowRejectsMissingOrInvalidRepoPath(t *testing.T) {
 	if len(relative.Errors) == 0 {
 		t.Fatalf("relative repoPath response had no errors: %#v", relative)
 	}
+
+	blankHandler := newFlowGraphQLHandlerWithCreator(t, store, flowcreate.New(flowcreate.Options{
+		Store: store,
+		CreateWorktree: func(string, string, string) (actions.FlowWorktreeCreateResult, error) {
+			t.Fatal("CreateWorktree should not run for a blank repo path")
+			return actions.FlowWorktreeCreateResult{}, nil
+		},
+	}))
+	var blank struct {
+		Data   any   `json:"data"`
+		Errors []any `json:"errors"`
+	}
+	postGraphQL(t, blankHandler, `mutation($input: CreateFlowInput!) {
+		createFlow(input: $input) { id }
+	}`, map[string]any{"input": map[string]any{
+		"repoPath":     "   ",
+		"title":        "Blank Repo",
+		"instructions": "invalid repo path",
+	}}, &blank)
+	if len(blank.Errors) == 0 {
+		t.Fatalf("blank repoPath response had no errors: %#v", blank)
+	}
 }
 
 func TestHandlerGraphQLCreateFlowReturnsBlockedFlowForWorktreeFailure(t *testing.T) {

@@ -115,6 +115,30 @@ func TestCreatorReturnsBlockedFlowForBootstrapFailure(t *testing.T) {
 	}
 }
 
+func TestCreatorReturnsBlockedFlowWithoutRequiringReadback(t *testing.T) {
+	store := failingReadStore{Store: newStore(t)}
+	creator := flowcreate.New(flowcreate.Options{
+		Store: store,
+		CreateWorktree: func(string, string, string) (actions.FlowWorktreeCreateResult, error) {
+			return actions.FlowWorktreeCreateResult{}, errors.New("branch exists")
+		},
+	})
+
+	record, err := creator.CreateFlow(context.Background(), graph.CreateFlowInput{
+		RepoPath:     "/dev/alpha",
+		Title:        "Parked Flow",
+		Instructions: "Build it",
+	})
+	if err != nil {
+		t.Fatalf("CreateFlow returned error: %v", err)
+	}
+	if len(record.Phases) == 0 ||
+		record.Phases[0].Status != flowstore.PhaseBlocked ||
+		!strings.Contains(record.Phases[0].Notes, "Worktree creation failed: branch exists") {
+		t.Fatalf("record phases = %#v", record.Phases)
+	}
+}
+
 func TestCreatorReturnsErrorWhenBlockedPhasePersistenceFails(t *testing.T) {
 	store := failingSetPhaseStore{Store: newStore(t)}
 	creator := flowcreate.New(flowcreate.Options{
@@ -137,11 +161,86 @@ func TestCreatorReturnsErrorWhenBlockedPhasePersistenceFails(t *testing.T) {
 	}
 }
 
+func TestCreatorReturnsErrorWhenInitialCreateFails(t *testing.T) {
+	calledWorktree := false
+	creator := flowcreate.New(flowcreate.Options{
+		Store: failingCreateStore{Store: newStore(t)},
+		CreateWorktree: func(string, string, string) (actions.FlowWorktreeCreateResult, error) {
+			calledWorktree = true
+			return actions.FlowWorktreeCreateResult{}, nil
+		},
+	})
+
+	_, err := creator.CreateFlow(context.Background(), graph.CreateFlowInput{
+		RepoPath:     "/dev/alpha",
+		Title:        "Parked Flow",
+		Instructions: "Build it",
+	})
+	if err == nil {
+		t.Fatal("CreateFlow returned nil error, want initial create persistence failure")
+	}
+	if !strings.Contains(err.Error(), "disk full") {
+		t.Fatalf("error = %q", err)
+	}
+	if calledWorktree {
+		t.Fatal("CreateWorktree was called after initial create failed")
+	}
+}
+
+func TestCreatorReturnsErrorWhenStartMetadataPersistenceFails(t *testing.T) {
+	store := failingStartMetadataStore{Store: newStore(t)}
+	creator := flowcreate.New(flowcreate.Options{
+		Store: store,
+		CreateWorktree: func(string, string, string) (actions.FlowWorktreeCreateResult, error) {
+			return actions.FlowWorktreeCreateResult{WorktreePath: "/dev/alpha-worktrees/flow-parked-flow", Branch: "flow/parked-flow"}, nil
+		},
+		ResolveCommit: func(string) string {
+			return "abc123"
+		},
+	})
+
+	_, err := creator.CreateFlow(context.Background(), graph.CreateFlowInput{
+		RepoPath:     "/dev/alpha",
+		Title:        "Parked Flow",
+		Instructions: "Build it",
+	})
+	if err == nil {
+		t.Fatal("CreateFlow returned nil error, want start metadata persistence failure")
+	}
+	if !strings.Contains(err.Error(), "disk full") {
+		t.Fatalf("error = %q", err)
+	}
+}
+
+type failingReadStore struct {
+	*flowstore.Store
+}
+
+func (s failingReadStore) Read(string) (flowstore.FlowRecord, error) {
+	return flowstore.FlowRecord{}, errors.New("read failed")
+}
+
+type failingCreateStore struct {
+	*flowstore.Store
+}
+
+func (s failingCreateStore) Create(flowstore.FlowRecord) (flowstore.FlowRecord, error) {
+	return flowstore.FlowRecord{}, errors.New("disk full")
+}
+
 type failingSetPhaseStore struct {
 	*flowstore.Store
 }
 
 func (s failingSetPhaseStore) SetPhase(flowstore.PhaseUpdate) (flowstore.FlowRecord, error) {
+	return flowstore.FlowRecord{}, errors.New("disk full")
+}
+
+type failingStartMetadataStore struct {
+	*flowstore.Store
+}
+
+func (s failingStartMetadataStore) SetStartMetadata(flowstore.StartMetadataUpdate) (flowstore.FlowRecord, error) {
 	return flowstore.FlowRecord{}, errors.New("disk full")
 }
 

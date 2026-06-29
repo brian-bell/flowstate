@@ -68,7 +68,7 @@ func (c Creator) CreateFlow(ctx context.Context, input graph.CreateFlowInput) (f
 		return flowstore.FlowRecord{}, err
 	}
 	if result.Blocked {
-		return c.store.Read(result.Flow.FlowID)
+		return result.Flow, nil
 	}
 	return result.Flow, nil
 }
