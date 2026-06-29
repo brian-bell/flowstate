@@ -16,6 +16,31 @@ import (
 	"github.com/brian-bell/flowstate/server/graph/model"
 )
 
+// CreateFlow is the resolver for the createFlow field.
+func (r *mutationResolver) CreateFlow(ctx context.Context, input model.CreateFlowInput) (*model.Flow, error) {
+	if r.FlowCreator == nil {
+		return nil, fmt.Errorf("flow creator is not configured")
+	}
+	baseRef := ""
+	if input.BaseRef != nil {
+		baseRef = *input.BaseRef
+	}
+	record, err := r.FlowCreator.CreateFlow(ctx, CreateFlowInput{
+		RepoPath:     input.RepoPath,
+		Title:        input.Title,
+		Instructions: input.Instructions,
+		BaseRef:      baseRef,
+	})
+	if err != nil {
+		return nil, err
+	}
+	view, err := flowquery.BuildWithRuntime(record, r.RuntimeJobs)
+	if err != nil {
+		return nil, err
+	}
+	return flowToGraphQL(view), nil
+}
+
 // Health is the resolver for the health field.
 func (r *queryResolver) Health(ctx context.Context) (string, error) {
 	return "ok", nil
@@ -68,7 +93,13 @@ func (r *queryResolver) Flow(ctx context.Context, id string) (*model.Flow, error
 	return flow, nil
 }
 
+// Mutation returns generated.MutationResolver implementation.
+func (r *Resolver) Mutation() generated.MutationResolver { return &mutationResolver{r} }
+
 // Query returns generated.QueryResolver implementation.
 func (r *Resolver) Query() generated.QueryResolver { return &queryResolver{r} }
 
-type queryResolver struct{ *Resolver }
+type (
+	mutationResolver struct{ *Resolver }
+	queryResolver    struct{ *Resolver }
+)

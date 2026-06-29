@@ -285,7 +285,13 @@ func runServe(args []string, deps runDeps) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := deps.serve(ctx, serveOptions{Listen: *listen, StateRoot: runtimeArtifactRootWithEnv(cfg, deps.getenv), Stdout: deps.stdout}); err != nil {
+	if err := deps.serve(ctx, serveOptions{
+		Listen:               *listen,
+		StateRoot:            runtimeArtifactRootWithEnv(cfg, deps.getenv),
+		BootstrapHookForRepo: bootstrapHookResolver(cfg),
+		RunBootstrapHook:     actions.RunBootstrapHook,
+		Stdout:               deps.stdout,
+	}); err != nil {
 		return fmt.Errorf("serve: %w", err)
 	}
 	return nil

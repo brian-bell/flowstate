@@ -10,6 +10,13 @@ import (
 	"time"
 )
 
+type CreateFlowInput struct {
+	RepoPath     string  `json:"repoPath"`
+	Title        string  `json:"title"`
+	Instructions string  `json:"instructions"`
+	BaseRef      *string `json:"baseRef,omitempty"`
+}
+
 type Flow struct {
 	ID                  string       `json:"id"`
 	Title               string       `json:"title"`
@@ -56,6 +63,9 @@ type Merge struct {
 	Status   string     `json:"status"`
 	Commit   string     `json:"commit"`
 	MergedAt *time.Time `json:"mergedAt,omitempty"`
+}
+
+type Mutation struct {
 }
 
 type PullRequest struct {

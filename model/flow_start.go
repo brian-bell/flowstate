@@ -6,6 +6,7 @@ import (
 
 	"github.com/brian-bell/flowstate/actions"
 	"github.com/brian-bell/flowstate/flowstore"
+	"github.com/brian-bell/flowstate/internal/flowstart"
 )
 
 const flowPlanPhaseID = "plan"
@@ -179,74 +180,37 @@ func (s FlowStarter) promptTemplatesForRequest(req FlowStartRequest) FlowPromptT
 }
 
 func (s FlowStarter) PrepareFlow(req FlowStartRequest) (FlowStartResult, error) {
-	phaseID := req.PlanPhaseID
-	if phaseID == "" {
-		phaseID = flowPlanPhaseID
+	prepared, err := s.prepareParkedFlow(req)
+	result := FlowStartResult{
+		Flow:     prepared.Flow,
+		Worktree: prepared.Worktree,
+		Commit:   prepared.Commit,
 	}
-
-	flow, err := s.createFlow(flowstore.FlowRecord{
-		Title:        req.Title,
-		Instructions: req.Instructions,
-		RepoPath:     req.RepoPath,
-		BaseRef:      req.BaseRef,
-	})
-	if err != nil {
-		return FlowStartResult{}, err
-	}
-	result := FlowStartResult{Flow: flow}
-
-	worktree, err := s.createWorktree(req.RepoPath, req.Title, req.BaseRef)
-	if err != nil {
-		return result, s.blockPlanPhase(flow.FlowID, phaseID, "Worktree creation failed: "+err.Error(), err.Error())
-	}
-	result.Worktree = worktree
-
-	commit := s.resolveCommit(worktree.WorktreePath)
-	result.Commit = commit
-	startedFlow, err := s.setStartMetadata(flowstore.StartMetadataUpdate{
-		FlowID:       flow.FlowID,
-		WorktreePath: worktree.WorktreePath,
-		Branch:       worktree.Branch,
-		BaseRef:      req.BaseRef,
-		Commit:       commit,
-	})
 	if err != nil {
 		return result, err
 	}
-	flow = startedFlow
-	result.Flow = flow
-
-	if err := s.runBootstrap(req.RepoPath, worktree); err != nil {
-		errText := "Bootstrap hook failed: " + err.Error()
-		return result, s.blockPlanPhase(flow.FlowID, phaseID, errText, errText)
+	if prepared.Blocked {
+		return result, fmt.Errorf("%s", prepared.BlockedMessage)
 	}
-
 	return result, nil
 }
 
-func (s FlowStarter) runBootstrap(repoPath string, worktree actions.FlowWorktreeCreateResult) error {
-	hook, ok := s.bootstrapHookForRepo(repoPath)
-	if !ok {
-		return nil
-	}
-	return s.runBootstrapHook(actions.BootstrapContext{
-		RepoPath:     repoPath,
-		WorktreePath: worktree.WorktreePath,
-		Ref:          worktree.Branch,
-		Kind:         actions.WorktreeCreateFlow,
-	}, hook)
-}
-
-func (s FlowStarter) blockPlanPhase(flowID, phaseID, notes, resultErr string) error {
-	if _, err := s.setPhase(flowstore.PhaseUpdate{
-		FlowID:  flowID,
-		PhaseID: phaseID,
-		Status:  flowstore.PhaseBlocked,
-		Notes:   notes,
-	}); err != nil {
-		return fmt.Errorf("%s; mark flow blocked: %v", resultErr, err)
-	}
-	return fmt.Errorf("%s", resultErr)
+func (s FlowStarter) prepareParkedFlow(req FlowStartRequest) (flowstart.Result, error) {
+	return flowstart.NewStarter(flowstart.Options{
+		CreateFlow:           s.createFlow,
+		CreateWorktree:       s.createWorktree,
+		SetStartMetadata:     s.setStartMetadata,
+		SetPhase:             s.setPhase,
+		BootstrapHookForRepo: s.bootstrapHookForRepo,
+		RunBootstrapHook:     s.runBootstrapHook,
+		ResolveCommit:        s.resolveCommit,
+	}).Prepare(flowstart.Request{
+		RepoPath:     req.RepoPath,
+		Title:        req.Title,
+		Instructions: req.Instructions,
+		BaseRef:      req.BaseRef,
+		PlanPhaseID:  req.PlanPhaseID,
+	})
 }
 
 func flowStartPromptRecord(flow flowstore.FlowRecord, req FlowStartRequest, worktree actions.FlowWorktreeCreateResult, commit string) flowstore.FlowRecord {

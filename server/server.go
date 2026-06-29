@@ -21,7 +21,9 @@ import (
 
 	"github.com/99designs/gqlgen/graphql/handler"
 	"github.com/99designs/gqlgen/graphql/handler/transport"
+	"github.com/brian-bell/flowstate/actions"
 	"github.com/brian-bell/flowstate/flowstore"
+	"github.com/brian-bell/flowstate/server/flowcreate"
 	"github.com/brian-bell/flowstate/server/flowquery"
 	"github.com/brian-bell/flowstate/server/graph"
 	"github.com/brian-bell/flowstate/server/graph/generated"
@@ -40,18 +42,21 @@ type HandlerOptions struct {
 	Scope          ListenerScope
 	AllowIPv6Alias bool
 	FlowReader     FlowReader
+	FlowCreator    FlowCreator
 	RuntimeJobs    flowquery.RuntimeJobLookup
 	StaticAssets   fs.FS
 	SPAShell       string
 }
 
 type Options struct {
-	Listen      string
-	Token       string
-	StateRoot   string
-	RuntimeJobs flowquery.RuntimeJobLookup
-	Stdout      io.Writer
-	Started     chan<- Started
+	Listen               string
+	Token                string
+	StateRoot            string
+	RuntimeJobs          flowquery.RuntimeJobLookup
+	BootstrapHookForRepo func(string) (actions.BootstrapHook, bool)
+	RunBootstrapHook     func(actions.BootstrapContext, actions.BootstrapHook) error
+	Stdout               io.Writer
+	Started              chan<- Started
 
 	resolve ListenResolveOptions
 	listen  func(network string, address string) (net.Listener, error)
@@ -61,6 +66,8 @@ type FlowReader interface {
 	List(flowstore.FlowFilter) ([]flowstore.FlowRecord, error)
 	Read(string) (flowstore.FlowRecord, error)
 }
+
+type FlowCreator = graph.FlowCreator
 
 type Started struct {
 	URL   string
@@ -80,10 +87,15 @@ func Run(ctx context.Context, opts Options) error {
 		}
 		token = generated
 	}
-	flowReader, err := flowstore.NewStore(flowstore.StoreOptions{Root: opts.StateRoot})
+	flowStore, err := flowstore.NewStore(flowstore.StoreOptions{Root: opts.StateRoot})
 	if err != nil {
 		return err
 	}
+	flowCreator := flowcreate.New(flowcreate.Options{
+		Store:                flowStore,
+		BootstrapHookForRepo: opts.BootstrapHookForRepo,
+		RunBootstrapHook:     opts.RunBootstrapHook,
+	})
 
 	listen := net.Listen
 	if opts.listen != nil {
@@ -105,7 +117,8 @@ func Run(ctx context.Context, opts Options) error {
 		ListenerPort:   listenerPort,
 		Scope:          resolvedListen.Scope,
 		AllowIPv6Alias: resolvedListen.Scope == ListenerScopeLoopback && listenerHost == "::1",
-		FlowReader:     flowReader,
+		FlowReader:     flowStore,
+		FlowCreator:    flowCreator,
 		RuntimeJobs:    opts.RuntimeJobs,
 	})
 	if err != nil {
@@ -179,6 +192,7 @@ func NewHandler(opts HandlerOptions) (http.Handler, error) {
 	})
 	graphqlHandler := handler.New(generated.NewExecutableSchema(generated.Config{Resolvers: &graph.Resolver{
 		FlowReader:  opts.FlowReader,
+		FlowCreator: opts.FlowCreator,
 		RuntimeJobs: opts.RuntimeJobs,
 	}}))
 	graphqlHandler.AddTransport(transport.POST{})
