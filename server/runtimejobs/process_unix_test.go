@@ -71,6 +71,56 @@ func TestRegistryCancelKillsRuntimeProcessGroup(t *testing.T) {
 	waitForProcessExit(t, childPID)
 }
 
+func TestRegistryCancelKillsRuntimeProcessGroupAfterParentExits(t *testing.T) {
+	dir := t.TempDir()
+	parentPath := dir + "/parent.pid"
+	childPath := dir + "/child.pid"
+	script := strings.Join([]string{
+		"echo $$ > " + shellQuote(parentPath),
+		"(trap '' TERM; while :; do sleep 1; done) &",
+		"child=$!",
+		"echo $child > " + shellQuote(childPath),
+		"wait",
+	}, "\n")
+	registry := runtimejobs.NewRegistry(runtimejobs.Options{
+		CancelGrace: 50 * time.Millisecond,
+		BuildCommand: func(ctx context.Context, launch actions.AgentLaunchContext) (*exec.Cmd, error) {
+			return exec.CommandContext(ctx, "/bin/sh", "-c", script), nil
+		},
+	})
+
+	snapshot, err := registry.Start(context.Background(), runtimejobs.StartRequest{
+		FlowID:   "flow-1",
+		PhaseID:  "implementation",
+		LaunchID: "launch-1",
+		Context: actions.AgentLaunchContext{
+			FlowID:      "flow-1",
+			FlowPhaseID: "implementation",
+			LaunchID:    "launch-1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	waitForJobStatus(t, registry, snapshot.ID, runtimejobs.StatusRunning)
+	parentPID := waitForPIDFile(t, parentPath)
+	childPID := waitForPIDFile(t, childPath)
+	parentPGID, err := syscall.Getpgid(parentPID)
+	if err != nil {
+		t.Fatalf("Getpgid(parent %d): %v", parentPID, err)
+	}
+	t.Cleanup(func() {
+		_ = syscall.Kill(-parentPGID, syscall.SIGKILL)
+	})
+
+	result := registry.Cancel(snapshot.ID)
+	if result.Code != runtimejobs.CancelCanceled || result.Snapshot.Status != runtimejobs.StatusCanceled {
+		t.Fatalf("Cancel() = %#v, want canceled", result)
+	}
+	waitForProcessExit(t, parentPID)
+	waitForProcessExit(t, childPID)
+}
+
 func waitForPIDFile(t *testing.T, path string) int {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
