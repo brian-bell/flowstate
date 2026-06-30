@@ -186,12 +186,14 @@ type FlowFilter struct {
 
 // PhaseUpdate describes one persisted phase status update.
 type PhaseUpdate struct {
-	FlowID  string
-	PhaseID string
-	Status  string
-	Outcome string
-	Notes   string
-	Summary string
+	FlowID                 string
+	PhaseID                string
+	Status                 string
+	Outcome                string
+	Notes                  string
+	Summary                string
+	ExpectedStatus         string
+	ExpectedLatestLaunchID string
 }
 
 // PhaseRestartUpdate restarts a blocked or needs-attention phase as running.
@@ -382,6 +384,9 @@ func (s *Store) SetPhase(update PhaseUpdate) (FlowRecord, error) {
 	now := s.now()
 	phase := record.Phases[phaseIndex]
 	originalStatus := phase.Status
+	if err := validatePhaseUpdateExpectations(phase, update); err != nil {
+		return FlowRecord{}, err
+	}
 	if err := validatePhaseUpdate(phase, update); err != nil {
 		return FlowRecord{}, err
 	}
@@ -1135,6 +1140,19 @@ func validatePhaseUpdate(current FlowPhase, update PhaseUpdate) error {
 	restarting := current.Status == PhaseNeedsAttention || current.Status == PhaseBlocked
 	if restarting && update.Status == PhaseRunning && strings.TrimSpace(update.Notes) == "" {
 		return fmt.Errorf("restarting %s phase requires notes", current.Status)
+	}
+	return nil
+}
+
+func validatePhaseUpdateExpectations(current FlowPhase, update PhaseUpdate) error {
+	if expected := strings.TrimSpace(update.ExpectedStatus); expected != "" && current.Status != expected {
+		return fmt.Errorf("flow phase %q changed before update: status is %s, expected %s", current.PhaseID, current.Status, expected)
+	}
+	if expected := strings.TrimSpace(update.ExpectedLatestLaunchID); expected != "" {
+		actual := LatestPhaseLaunchID(current)
+		if actual != expected {
+			return fmt.Errorf("flow phase %q changed before update: latest launch id is %q, expected %q", current.PhaseID, actual, expected)
+		}
 	}
 	return nil
 }

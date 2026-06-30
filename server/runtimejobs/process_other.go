@@ -15,12 +15,16 @@ func terminateRuntimeCommand(cmd *exec.Cmd, done <-chan struct{}, grace time.Dur
 	if err := signalProcess(cmd, os.Interrupt); err != nil {
 		return err
 	}
-	select {
-	case <-done:
+	if waitForRuntimeCommand(done, grace) {
 		return nil
-	case <-time.After(grace):
 	}
-	return signalProcess(cmd, os.Kill)
+	if err := signalProcess(cmd, os.Kill); err != nil {
+		return err
+	}
+	if waitForRuntimeCommand(done, grace) {
+		return nil
+	}
+	return errors.New("runtime command did not exit after forced kill")
 }
 
 func terminateStartedRuntimeCommand(cmd *exec.Cmd, grace time.Duration) error {
@@ -43,4 +47,18 @@ func signalProcess(cmd *exec.Cmd, signal os.Signal) error {
 		return err
 	}
 	return nil
+}
+
+func waitForRuntimeCommand(done <-chan struct{}, timeout time.Duration) bool {
+	if done == nil {
+		return true
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-done:
+		return true
+	case <-timer.C:
+		return false
+	}
 }

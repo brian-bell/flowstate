@@ -1,3 +1,5 @@
+//go:build linux
+
 package runtimejobs_test
 
 import (

@@ -39,9 +39,9 @@ type CommandBuilder func(context.Context, actions.AgentLaunchContext) (*exec.Cmd
 
 type FlowReader func(string) (flowstore.FlowRecord, error)
 
-type PhaseResetter func(flowstore.PhaseResetUpdate) (flowstore.FlowRecord, error)
-
 type PhaseUpdater func(flowstore.PhaseUpdate) (flowstore.FlowRecord, error)
+
+var terminateRuntimeCommandFunc = terminateRuntimeCommand
 
 type Options struct {
 	MaxLogBytes  int
@@ -52,7 +52,6 @@ type Options struct {
 	Now          func() time.Time
 	BuildCommand CommandBuilder
 	ReadFlow     FlowReader
-	ResetPhase   PhaseResetter
 	UpdatePhase  PhaseUpdater
 }
 
@@ -104,7 +103,6 @@ type Registry struct {
 	now          func() time.Time
 	buildCommand CommandBuilder
 	readFlow     FlowReader
-	resetPhase   PhaseResetter
 	updatePhase  PhaseUpdater
 	nextID       atomic.Uint64
 }
@@ -152,7 +150,6 @@ func NewRegistry(opts Options) *Registry {
 		now:          now,
 		buildCommand: buildCommand,
 		readFlow:     opts.ReadFlow,
-		resetPhase:   opts.ResetPhase,
 		updatePhase:  opts.UpdatePhase,
 	}
 }
@@ -258,12 +255,19 @@ func (r *Registry) cancelJob(id, reason string, updatePhase bool) CancelResult {
 	snapshot := j.snapshot
 	r.mu.Unlock()
 
+	terminationConfirmed := true
 	if cmd != nil && cmd.Process != nil {
-		r.terminateCommandAsync(snapshot.ID, cmd, done, cancel)
+		if err := terminateRuntimeCommandFunc(cmd, done, r.cancelGrace); err != nil {
+			r.appendJobError(snapshot.ID, fmt.Sprintf("terminate runtime process group: %v", err))
+			terminationConfirmed = false
+		}
+		if cancel != nil {
+			cancel()
+		}
 	} else if cancel != nil {
 		cancel()
 	}
-	if updatePhase {
+	if updatePhase && terminationConfirmed {
 		r.markCanceledNeedsAttention(snapshot)
 	}
 	if updated, ok := r.Lookup(trimmed); ok {
@@ -392,17 +396,6 @@ func (r *Registry) closeDone(id string) {
 	r.mu.Unlock()
 }
 
-func (r *Registry) terminateCommandAsync(id string, cmd *exec.Cmd, done <-chan struct{}, cancel context.CancelFunc) {
-	go func() {
-		if err := terminateRuntimeCommand(cmd, done, r.cancelGrace); err != nil {
-			r.appendJobError(id, fmt.Sprintf("terminate runtime process group: %v", err))
-		}
-		if cancel != nil {
-			cancel()
-		}
-	}()
-}
-
 func (r *Registry) writer(id string) io.Writer {
 	return writerFunc(func(p []byte) (int, error) {
 		r.mu.Lock()
@@ -471,11 +464,13 @@ func (r *Registry) markNeedsAttention(id, errText string) {
 		return
 	}
 	_, err := r.updatePhase(flowstore.PhaseUpdate{
-		FlowID:  snapshot.FlowID,
-		PhaseID: snapshot.PhaseID,
-		Status:  flowstore.PhaseNeedsAttention,
-		Outcome: runtimeFailureOutcome(snapshot.PhaseID),
-		Notes:   "Runtime job failed: " + errText,
+		FlowID:                 snapshot.FlowID,
+		PhaseID:                snapshot.PhaseID,
+		Status:                 flowstore.PhaseNeedsAttention,
+		Outcome:                runtimeFailureOutcome(snapshot.PhaseID),
+		Notes:                  "Runtime job failed: " + errText,
+		ExpectedStatus:         flowstore.PhaseRunning,
+		ExpectedLatestLaunchID: snapshot.LaunchID,
 	})
 	if err == nil {
 		return
@@ -512,11 +507,13 @@ func (r *Registry) markCanceledNeedsAttention(snapshot Snapshot) {
 		return
 	}
 	if _, err := r.updatePhase(flowstore.PhaseUpdate{
-		FlowID:  snapshot.FlowID,
-		PhaseID: snapshot.PhaseID,
-		Status:  flowstore.PhaseNeedsAttention,
-		Outcome: runtimeCanceledOutcome(snapshot.PhaseID),
-		Notes:   fmt.Sprintf("Runtime job %s canceled by user request.", snapshot.ID),
+		FlowID:                 snapshot.FlowID,
+		PhaseID:                snapshot.PhaseID,
+		Status:                 flowstore.PhaseNeedsAttention,
+		Outcome:                runtimeCanceledOutcome(snapshot.PhaseID),
+		Notes:                  fmt.Sprintf("Runtime job %s canceled by user request.", snapshot.ID),
+		ExpectedStatus:         flowstore.PhaseRunning,
+		ExpectedLatestLaunchID: snapshot.LaunchID,
 	}); err != nil {
 		r.setPhaseUpdateError(snapshot.ID, fmt.Sprintf("update phase after runtime cancel: %v", err))
 	}

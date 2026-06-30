@@ -1,3 +1,5 @@
+//go:build linux
+
 package runtimejobs
 
 import (
@@ -18,12 +20,16 @@ func terminateRuntimeCommand(cmd *exec.Cmd, done <-chan struct{}, grace time.Dur
 	if err := signalProcessGroup(cmd, syscall.SIGTERM); err != nil {
 		return err
 	}
-	select {
-	case <-done:
+	if waitForRuntimeCommand(done, grace) {
 		return nil
-	case <-time.After(grace):
 	}
-	return signalProcessGroup(cmd, syscall.SIGKILL)
+	if err := signalProcessGroup(cmd, syscall.SIGKILL); err != nil {
+		return err
+	}
+	if waitForRuntimeCommand(done, grace) {
+		return nil
+	}
+	return errors.New("runtime command did not exit after forced kill")
 }
 
 func terminateStartedRuntimeCommand(cmd *exec.Cmd, grace time.Duration) error {
@@ -53,4 +59,18 @@ func signalProcessGroup(cmd *exec.Cmd, signal syscall.Signal) error {
 		return err
 	}
 	return nil
+}
+
+func waitForRuntimeCommand(done <-chan struct{}, timeout time.Duration) bool {
+	if done == nil {
+		return true
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-done:
+		return true
+	case <-timer.C:
+		return false
+	}
 }
