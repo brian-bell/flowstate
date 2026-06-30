@@ -293,7 +293,9 @@ func (r *Registry) evictExpiredLocked(now time.Time) {
 }
 
 func (r *Registry) run(ctx context.Context, id string, launch actions.AgentLaunchContext) {
-	r.setStatus(id, StatusStarting, nil)
+	if !r.setStatus(id, StatusStarting, nil) {
+		return
+	}
 	cmd, err := r.buildCommand(ctx, launch)
 	if err != nil {
 		r.fail(id, nil, fmt.Errorf("build agent command: %w", err), launch)
@@ -310,7 +312,10 @@ func (r *Registry) run(ctx context.Context, id string, launch actions.AgentLaunc
 		return
 	}
 	startedAt := r.now()
-	r.setStatus(id, StatusRunning, &startedAt)
+	if !r.setStatus(id, StatusRunning, &startedAt) {
+		_ = cmd.Wait()
+		return
+	}
 	err = cmd.Wait()
 	if err == nil {
 		code := 0
@@ -334,17 +339,18 @@ func (r *Registry) writer(id string) io.Writer {
 	})
 }
 
-func (r *Registry) setStatus(id string, status Status, startedAt *time.Time) {
+func (r *Registry) setStatus(id string, status Status, startedAt *time.Time) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	j, ok := r.jobs[id]
 	if !ok || terminal(j.snapshot.Status) {
-		return
+		return false
 	}
 	j.snapshot.Status = status
 	if startedAt != nil {
 		j.snapshot.StartedAt = cloneTime(*startedAt)
 	}
+	return true
 }
 
 func (r *Registry) finish(id string, status Status, exitCode *int, errText string) bool {

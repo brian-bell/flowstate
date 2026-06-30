@@ -159,6 +159,11 @@ func Run(ctx context.Context, opts Options) error {
 			return err
 		}
 	}
+	defer func() {
+		if ownedRegistry != nil {
+			ownedRegistry.CancelAll()
+		}
+	}()
 
 	listen := net.Listen
 	if opts.listen != nil {
@@ -227,9 +232,6 @@ func Run(ctx context.Context, opts Options) error {
 	case err := <-serveErr:
 		return err
 	case <-ctx.Done():
-		if ownedRegistry != nil {
-			ownedRegistry.CancelAll()
-		}
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := server.Shutdown(shutdownCtx); err != nil {

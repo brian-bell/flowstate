@@ -96,6 +96,38 @@ func TestRegistryStartDetachesRuntimeJobFromCallerCancellation(t *testing.T) {
 	}
 }
 
+func TestRegistryCancelBeforeRunStartsDoesNotBuildCommand(t *testing.T) {
+	buildCalled := make(chan struct{}, 1)
+	registry := runtimejobs.NewRegistry(runtimejobs.Options{
+		BuildCommand: func(ctx context.Context, launch actions.AgentLaunchContext) (*exec.Cmd, error) {
+			buildCalled <- struct{}{}
+			return exec.CommandContext(ctx, "/bin/sh", "-c", "true"), nil
+		},
+	})
+
+	snapshot, err := registry.Start(context.Background(), runtimejobs.StartRequest{
+		FlowID:   "flow-1",
+		PhaseID:  "implementation",
+		LaunchID: "launch-1",
+		Context: actions.AgentLaunchContext{
+			FlowID:      "flow-1",
+			FlowPhaseID: "implementation",
+			LaunchID:    "launch-1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	registry.Cancel(snapshot.ID)
+	waitForJobStatus(t, registry, snapshot.ID, runtimejobs.StatusCanceled)
+
+	select {
+	case <-buildCalled:
+		t.Fatal("BuildCommand called after job was canceled")
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
 func TestRegistryActiveRuntimeJobRequiresCurrentPhaseLaunchID(t *testing.T) {
 	registry := runtimejobs.NewRegistry(runtimejobs.Options{
 		BuildCommand: func(ctx context.Context, launch actions.AgentLaunchContext) (*exec.Cmd, error) {
