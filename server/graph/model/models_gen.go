@@ -10,6 +10,21 @@ import (
 	"time"
 )
 
+type CreateFlowAndLaunchPlanInput struct {
+	RepoPath        string  `json:"repoPath"`
+	Title           string  `json:"title"`
+	Instructions    string  `json:"instructions"`
+	BaseRef         *string `json:"baseRef,omitempty"`
+	AgentCommand    *string `json:"agentCommand,omitempty"`
+	ReasoningEffort *string `json:"reasoningEffort,omitempty"`
+}
+
+type CreateFlowAndLaunchPlanPayload struct {
+	Flow     *Flow       `json:"flow"`
+	LaunchID *string     `json:"launchId,omitempty"`
+	Job      *RuntimeJob `json:"job,omitempty"`
+}
+
 type CreateFlowInput struct {
 	RepoPath     string  `json:"repoPath"`
 	Title        string  `json:"title"`

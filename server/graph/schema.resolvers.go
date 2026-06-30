@@ -8,14 +8,11 @@ package graph
 import (
 	"context"
 	"fmt"
-	"os"
 	"slices"
-	"strings"
 
 	"github.com/brian-bell/flowstate/flowlaunch"
 	"github.com/brian-bell/flowstate/flowstore"
 	"github.com/brian-bell/flowstate/internal/artifacts"
-	"github.com/brian-bell/flowstate/planstore"
 	"github.com/brian-bell/flowstate/server/flowquery"
 	"github.com/brian-bell/flowstate/server/graph/generated"
 	"github.com/brian-bell/flowstate/server/graph/model"
@@ -47,6 +44,104 @@ func (r *mutationResolver) CreateFlow(ctx context.Context, input model.CreateFlo
 	return flowToGraphQL(view), nil
 }
 
+// CreateFlowAndLaunchPlan is the resolver for the createFlowAndLaunchPlan field.
+func (r *mutationResolver) CreateFlowAndLaunchPlan(ctx context.Context, input model.CreateFlowAndLaunchPlanInput) (*model.CreateFlowAndLaunchPlanPayload, error) {
+	if r.FlowCreator == nil {
+		return nil, fmt.Errorf("flow creator is not configured")
+	}
+	if r.FlowStore == nil {
+		return nil, fmt.Errorf("flow store is not configured")
+	}
+	if r.RuntimeStarter == nil {
+		return nil, fmt.Errorf("runtime job starter is not configured")
+	}
+	command, err := r.launchAgentCommand(input.AgentCommand)
+	if err != nil {
+		return nil, err
+	}
+	reasoningEffort, err := r.launchReasoningEffort(command, input.ReasoningEffort)
+	if err != nil {
+		return nil, err
+	}
+	baseRef := ""
+	if input.BaseRef != nil {
+		baseRef = *input.BaseRef
+	}
+	record, err := r.FlowCreator.CreateFlow(ctx, CreateFlowInput{
+		RepoPath:     input.RepoPath,
+		Title:        input.Title,
+		Instructions: input.Instructions,
+		BaseRef:      baseRef,
+	})
+	if err != nil {
+		return nil, err
+	}
+	phase, ok := flowlaunch.PhaseByID(record, "plan")
+	if !ok {
+		return nil, fmt.Errorf("phase %q not found in flow %q", "plan", record.FlowID)
+	}
+	if phase.Status == flowstore.PhaseBlocked {
+		view, err := flowquery.BuildWithRuntime(record, r.RuntimeJobs)
+		if err != nil {
+			view = flowquery.Build(record)
+		}
+		return &model.CreateFlowAndLaunchPlanPayload{Flow: flowToGraphQL(view)}, nil
+	}
+	if !flowlaunch.PhaseCanLaunch(record, phase) {
+		return nil, fmt.Errorf("phase %q is not launchable from status %q", phase.PhaseID, phase.Status)
+	}
+	launcher := r.newFlowLauncher(record, command, reasoningEffort)
+	prepared, err := launcher.Preflight(flowlaunch.Request{
+		Record:        record,
+		Phase:         phase,
+		Headless:      true,
+		RejectRunning: true,
+	})
+	if err != nil {
+		return nil, err
+	}
+	result, err := launcher.Prepare(prepared)
+	if err != nil {
+		return nil, err
+	}
+	launchContext := result.Context
+	launchContext.Embedded = false
+	launchContext.Headless = true
+	launchContext.FlowLaunchTracked = true
+	snapshot, err := r.RuntimeStarter.Start(ctx, runtimejobs.StartRequest{
+		FlowID:   record.FlowID,
+		PhaseID:  launchContext.FlowPhaseID,
+		LaunchID: launchContext.LaunchID,
+		Context:  launchContext,
+	})
+	if err != nil {
+		if _, updateErr := r.FlowStore.SetPhase(flowstore.PhaseUpdate{
+			FlowID:  record.FlowID,
+			PhaseID: launchContext.FlowPhaseID,
+			Status:  flowstore.PhaseNeedsAttention,
+			Outcome: launchStartFailureOutcome(launchContext.FlowPhaseID),
+			Notes:   "Runtime job failed to start: " + err.Error(),
+		}); updateErr != nil {
+			return nil, fmt.Errorf("runtime job failed to start: %w; additionally failed to mark phase needs_attention: %v", err, updateErr)
+		}
+		return nil, err
+	}
+	updated, err := r.FlowStore.Read(record.FlowID)
+	if err != nil {
+		return nil, err
+	}
+	view, err := flowquery.BuildWithRuntime(updated, r.RuntimeJobs)
+	if err != nil {
+		view = flowquery.Build(updated)
+	}
+	launchID := launchContext.LaunchID
+	return &model.CreateFlowAndLaunchPlanPayload{
+		Flow:     flowToGraphQL(view),
+		LaunchID: &launchID,
+		Job:      runtimeJobSnapshotToGraphQL(snapshot),
+	}, nil
+}
+
 // LaunchFlowPhase is the resolver for the launchFlowPhase field.
 func (r *mutationResolver) LaunchFlowPhase(ctx context.Context, input model.LaunchFlowPhaseInput) (*model.LaunchFlowPhasePayload, error) {
 	if r.FlowStore == nil {
@@ -66,39 +161,15 @@ func (r *mutationResolver) LaunchFlowPhase(ctx context.Context, input model.Laun
 	if !flowlaunch.PhaseCanLaunch(record, phase) {
 		return nil, fmt.Errorf("phase %q is not launchable from status %q", phase.PhaseID, phase.Status)
 	}
-	command, err := r.launchAgentCommand(input)
+	command, err := r.launchAgentCommand(input.AgentCommand)
 	if err != nil {
 		return nil, err
 	}
-	reasoningEffort, err := r.launchReasoningEffort(command, input)
+	reasoningEffort, err := r.launchReasoningEffort(command, input.ReasoningEffort)
 	if err != nil {
 		return nil, err
 	}
-	launcher := flowlaunch.Launcher{
-		PlanMarkdownPath: func(planID string) (string, error) {
-			return planstore.MarkdownPath(r.StateRoot, planID)
-		},
-		ReadPlan: func(planID string) (string, error) {
-			planPath := record.PlanPath
-			if strings.TrimSpace(planPath) == "" {
-				var err error
-				planPath, err = planstore.MarkdownPath(r.StateRoot, planID)
-				if err != nil {
-					return "", err
-				}
-			}
-			data, err := os.ReadFile(planPath)
-			if err != nil {
-				return "", err
-			}
-			return string(data), nil
-		},
-		AddPhaseLaunchID: r.FlowStore.AddPhaseLaunchID,
-		SessionStateRoot: r.StateRoot,
-		AgentCommand:     command,
-		ReasoningEffort:  reasoningEffort,
-		Templates:        r.FlowPromptTemplates,
-	}
+	launcher := r.newFlowLauncher(record, command, reasoningEffort)
 	prepared, err := launcher.Preflight(flowlaunch.Request{
 		Record:        record,
 		Phase:         phase,

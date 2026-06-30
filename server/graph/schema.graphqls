@@ -13,6 +13,7 @@ type Query {
 
 type Mutation {
   createFlow(input: CreateFlowInput!): Flow!
+  createFlowAndLaunchPlan(input: CreateFlowAndLaunchPlanInput!): CreateFlowAndLaunchPlanPayload!
   launchFlowPhase(input: LaunchFlowPhaseInput!): LaunchFlowPhasePayload!
   cancelRuntimeJob(id: ID!): RuntimeJob!
   setFlowPhaseStatus(input: SetFlowPhaseStatusInput!): SetFlowPhaseStatusPayload!
@@ -23,6 +24,21 @@ input CreateFlowInput {
   title: String!
   instructions: String!
   baseRef: String
+}
+
+input CreateFlowAndLaunchPlanInput {
+  repoPath: String!
+  title: String!
+  instructions: String!
+  baseRef: String
+  agentCommand: String
+  reasoningEffort: String
+}
+
+type CreateFlowAndLaunchPlanPayload {
+  flow: Flow!
+  launchId: ID
+  job: RuntimeJob
 }
 
 input LaunchFlowPhaseInput {
