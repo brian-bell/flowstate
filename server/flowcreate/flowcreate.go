@@ -64,7 +64,19 @@ func (c Creator) CreateFlow(ctx context.Context, input graph.CreateFlowInput) (f
 		BaseRef:      strings.TrimSpace(input.BaseRef),
 	})
 	if err != nil {
+		if flowBlocked(result.Flow) {
+			return result.Flow, nil
+		}
 		return flowstore.FlowRecord{}, err
 	}
 	return result.Flow, nil
+}
+
+func flowBlocked(record flowstore.FlowRecord) bool {
+	for _, phase := range record.Phases {
+		if phase.Status == flowstore.PhaseBlocked {
+			return true
+		}
+	}
+	return false
 }

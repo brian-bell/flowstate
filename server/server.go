@@ -22,6 +22,7 @@ import (
 
 	"github.com/99designs/gqlgen/graphql/handler"
 	"github.com/99designs/gqlgen/graphql/handler/transport"
+	"github.com/brian-bell/flowstate/actions"
 	"github.com/brian-bell/flowstate/flowlaunch"
 	"github.com/brian-bell/flowstate/flowstore"
 	"github.com/brian-bell/flowstate/server/flowcreate"
@@ -69,6 +70,8 @@ type Options struct {
 	CodexReasoningEffort  string
 	ClaudeReasoningEffort string
 	FlowPromptTemplates   flowlaunch.PromptTemplates
+	BootstrapHookForRepo  func(string) (actions.BootstrapHook, bool)
+	RunBootstrapHook      func(actions.BootstrapContext, actions.BootstrapHook) error
 	Stdout                io.Writer
 	Started               chan<- Started
 
@@ -172,13 +175,17 @@ func Run(ctx context.Context, opts Options) error {
 		return err
 	}
 	handler, err := NewHandler(HandlerOptions{
-		Token:                 token,
-		ListenerHost:          listenerHost,
-		ListenerPort:          listenerPort,
-		Scope:                 resolvedListen.Scope,
-		AllowIPv6Alias:        resolvedListen.Scope == ListenerScopeLoopback && listenerHost == "::1",
-		FlowStore:             flowStore,
-		FlowCreator:           flowcreate.New(flowcreate.Options{Store: flowStore}),
+		Token:          token,
+		ListenerHost:   listenerHost,
+		ListenerPort:   listenerPort,
+		Scope:          resolvedListen.Scope,
+		AllowIPv6Alias: resolvedListen.Scope == ListenerScopeLoopback && listenerHost == "::1",
+		FlowStore:      flowStore,
+		FlowCreator: flowcreate.New(flowcreate.Options{
+			Store:                flowStore,
+			BootstrapHookForRepo: opts.BootstrapHookForRepo,
+			RunBootstrapHook:     opts.RunBootstrapHook,
+		}),
 		RuntimeJobs:           runtimeJobs,
 		RuntimeStarter:        runtimeStarter,
 		RuntimeController:     runtimeController,

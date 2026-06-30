@@ -302,7 +302,9 @@ func runServe(args []string, deps runDeps) error {
 			Merge:          cfg.FlowPrompts.Merge,
 			Generic:        cfg.FlowPrompts.Generic,
 		},
-		Stdout: deps.stdout,
+		BootstrapHookForRepo: bootstrapHookResolver(cfg),
+		RunBootstrapHook:     actions.RunBootstrapHook,
+		Stdout:               deps.stdout,
 	}); err != nil {
 		return fmt.Errorf("serve: %w", err)
 	}
