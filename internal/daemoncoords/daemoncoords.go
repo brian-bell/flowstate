@@ -120,8 +120,13 @@ func readFrom(path string) (Coords, error) {
 }
 
 // RemoveIfMatches deletes the coords file only when it still matches c exactly,
-// so one daemon never deletes a newer daemon's discovery file. A missing file
-// is not an error; read and remove failures are surfaced.
+// so a shutting-down daemon avoids deleting a newer daemon's discovery file in
+// the common case. The compare-and-delete is best-effort, not atomic: if a newer
+// daemon publishes between the read and the remove, its file can still be
+// deleted. That residual race is accepted because coords are best-effort
+// discovery — Write intentionally overwrites stale coords and clients
+// liveness-check the PID — and is not worth a cross-process lock here. A missing
+// file is not an error; read and remove failures are surfaced.
 func RemoveIfMatches(c Coords) error {
 	path, err := Path()
 	if err != nil {
