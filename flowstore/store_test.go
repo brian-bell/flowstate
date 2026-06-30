@@ -1012,6 +1012,76 @@ func TestStoreAddPhaseLaunchIDRejectRunningPreventsDuplicateFreshLaunch(t *testi
 	}
 }
 
+func TestStoreSetPhaseExpectedLatestLaunchIDPreventsStaleRuntimeUpdate(t *testing.T) {
+	root := t.TempDir()
+	store, err := flowstore.NewStore(flowstore.StoreOptions{Root: root})
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+	record, err := store.Create(flowstore.FlowRecord{
+		Title:        "Guard stale runtime update",
+		Instructions: "Launch twice",
+		RepoPath:     filepath.Join(root, "repo"),
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	record, err = store.AddPhaseLaunchID(flowstore.PhaseLaunchUpdate{
+		FlowID:   record.FlowID,
+		PhaseID:  "plan",
+		LaunchID: "launch-1",
+	})
+	if err != nil {
+		t.Fatalf("AddPhaseLaunchID(launch-1) error = %v", err)
+	}
+	record, err = store.AddPhaseLaunchID(flowstore.PhaseLaunchUpdate{
+		FlowID:   record.FlowID,
+		PhaseID:  "plan",
+		LaunchID: "launch-2",
+	})
+	if err != nil {
+		t.Fatalf("AddPhaseLaunchID(launch-2) error = %v", err)
+	}
+
+	_, err = store.SetPhase(flowstore.PhaseUpdate{
+		FlowID:                 record.FlowID,
+		PhaseID:                "plan",
+		Status:                 flowstore.PhaseNeedsAttention,
+		Outcome:                "runtime_canceled",
+		Notes:                  "Runtime job job-1 canceled by user request.",
+		ExpectedStatus:         flowstore.PhaseRunning,
+		ExpectedLatestLaunchID: "launch-1",
+	})
+	if err == nil || !strings.Contains(err.Error(), `latest launch id is "launch-2", expected "launch-1"`) {
+		t.Fatalf("SetPhase(stale launch) error = %v, want latest launch guard", err)
+	}
+	read, err := store.Read(record.FlowID)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	phase := phaseByID(t, read, "plan")
+	if phase.Status != flowstore.PhaseRunning || flowstore.LatestPhaseLaunchID(phase) != "launch-2" {
+		t.Fatalf("phase after stale update = %#v, want running launch-2", phase)
+	}
+
+	updated, err := store.SetPhase(flowstore.PhaseUpdate{
+		FlowID:                 record.FlowID,
+		PhaseID:                "plan",
+		Status:                 flowstore.PhaseNeedsAttention,
+		Outcome:                "runtime_canceled",
+		Notes:                  "Runtime job job-2 canceled by user request.",
+		ExpectedStatus:         flowstore.PhaseRunning,
+		ExpectedLatestLaunchID: "launch-2",
+	})
+	if err != nil {
+		t.Fatalf("SetPhase(current launch) error = %v", err)
+	}
+	phase = phaseByID(t, updated, "plan")
+	if phase.Status != flowstore.PhaseNeedsAttention || phase.Outcome != "runtime_canceled" {
+		t.Fatalf("phase after current update = %#v, want runtime_canceled needs_attention", phase)
+	}
+}
+
 func TestStoreAddPhaseLaunchIDRejectRunningRejectsStaleNonLaunchablePhase(t *testing.T) {
 	root := t.TempDir()
 	store, err := flowstore.NewStore(flowstore.StoreOptions{Root: root})
@@ -1656,6 +1726,144 @@ func TestStoreAddPhaseLaunchIDRestartsNeedsAttentionPhase(t *testing.T) {
 		t.Fatalf("autoreview notes = %q, want restart note", phase.Notes)
 	}
 	if len(phase.LaunchIDs) != 1 || phase.LaunchIDs[0] != "launch-autoreview-2" {
+		t.Fatalf("launch ids = %#v", phase.LaunchIDs)
+	}
+}
+
+func TestStoreAddPhaseLaunchIDRejectRunningRestartsRuntimeCanceledPhase(t *testing.T) {
+	root := t.TempDir()
+	store, err := flowstore.NewStore(flowstore.StoreOptions{Root: root})
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+	record, err := store.Create(flowstore.FlowRecord{
+		Title:        "Runtime cancel relaunch",
+		Instructions: "restart implementation after cancel",
+		RepoPath:     filepath.Join(root, "repo"),
+		Branch:       "flow/runtime-cancel-relaunch",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	mustCompleteFlowPhases(t, store, &record, "plan", "plan-review")
+	record, err = store.SetPhase(flowstore.PhaseUpdate{
+		FlowID:  record.FlowID,
+		PhaseID: "implementation",
+		Status:  flowstore.PhaseNeedsAttention,
+		Outcome: "runtime_canceled",
+		Notes:   "Runtime job job-1 canceled by user request.",
+	})
+	if err != nil {
+		t.Fatalf("SetPhase(implementation runtime_canceled) error = %v", err)
+	}
+
+	relaunched, err := store.AddPhaseLaunchID(flowstore.PhaseLaunchUpdate{
+		FlowID:        record.FlowID,
+		PhaseID:       "implementation",
+		LaunchID:      "launch-retry",
+		RejectRunning: true,
+	})
+	if err != nil {
+		t.Fatalf("AddPhaseLaunchID(implementation retry) error = %v", err)
+	}
+
+	phase := phaseByID(t, relaunched, "implementation")
+	if phase.Status != flowstore.PhaseRunning || phase.Outcome != "" {
+		t.Fatalf("implementation after relaunch = %#v, want running with cleared outcome", phase)
+	}
+	if len(phase.LaunchIDs) != 1 || phase.LaunchIDs[0] != "launch-retry" {
+		t.Fatalf("launch ids = %#v", phase.LaunchIDs)
+	}
+}
+
+func TestStoreAddPhaseLaunchIDRejectRunningRestartsPlanReviewRuntimeFailure(t *testing.T) {
+	root := t.TempDir()
+	store, err := flowstore.NewStore(flowstore.StoreOptions{Root: root})
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+	record, err := store.Create(flowstore.FlowRecord{
+		Title:        "Plan review runtime retry",
+		Instructions: "restart plan review after runtime failure",
+		RepoPath:     filepath.Join(root, "repo"),
+		Branch:       "flow/plan-review-runtime-retry",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	mustCompleteFlowPhases(t, store, &record, "plan")
+	record, err = store.SetPhase(flowstore.PhaseUpdate{
+		FlowID:  record.FlowID,
+		PhaseID: "plan-review",
+		Status:  flowstore.PhaseNeedsAttention,
+		Outcome: flowstore.OutcomeChangesRequested,
+		Notes:   "Runtime job failed to start: runtime unavailable",
+	})
+	if err != nil {
+		t.Fatalf("SetPhase(plan-review runtime failure) error = %v", err)
+	}
+
+	relaunched, err := store.AddPhaseLaunchID(flowstore.PhaseLaunchUpdate{
+		FlowID:        record.FlowID,
+		PhaseID:       "plan-review",
+		LaunchID:      "launch-plan-review-retry",
+		RejectRunning: true,
+	})
+	if err != nil {
+		t.Fatalf("AddPhaseLaunchID(plan-review retry) error = %v", err)
+	}
+
+	phase := phaseByID(t, relaunched, "plan-review")
+	if phase.Status != flowstore.PhaseRunning || phase.Outcome != "" {
+		t.Fatalf("plan-review after relaunch = %#v, want running with cleared outcome", phase)
+	}
+	if len(phase.LaunchIDs) != 1 || phase.LaunchIDs[0] != "launch-plan-review-retry" {
+		t.Fatalf("launch ids = %#v", phase.LaunchIDs)
+	}
+}
+
+func TestStoreAddPhaseLaunchIDRejectRunningRestartsPlanReviewShutdownCancel(t *testing.T) {
+	root := t.TempDir()
+	store, err := flowstore.NewStore(flowstore.StoreOptions{Root: root})
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+	record, err := store.Create(flowstore.FlowRecord{
+		Title:        "Plan review shutdown retry",
+		Instructions: "restart plan review after server shutdown",
+		RepoPath:     filepath.Join(root, "repo"),
+		Branch:       "flow/plan-review-shutdown-retry",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	mustCompleteFlowPhases(t, store, &record, "plan")
+	record, err = store.SetPhase(flowstore.PhaseUpdate{
+		FlowID:  record.FlowID,
+		PhaseID: "plan-review",
+		Status:  flowstore.PhaseNeedsAttention,
+		Outcome: flowstore.OutcomeChangesRequested,
+		Notes:   "Runtime job job-1 canceled because the server shut down.",
+	})
+	if err != nil {
+		t.Fatalf("SetPhase(plan-review shutdown cancel) error = %v", err)
+	}
+
+	relaunched, err := store.AddPhaseLaunchID(flowstore.PhaseLaunchUpdate{
+		FlowID:        record.FlowID,
+		PhaseID:       "plan-review",
+		LaunchID:      "launch-plan-review-shutdown-retry",
+		RejectRunning: true,
+	})
+	if err != nil {
+		t.Fatalf("AddPhaseLaunchID(plan-review shutdown retry) error = %v", err)
+	}
+
+	phase := phaseByID(t, relaunched, "plan-review")
+	if phase.Status != flowstore.PhaseRunning || phase.Outcome != "" {
+		t.Fatalf("plan-review after relaunch = %#v, want running with cleared outcome", phase)
+	}
+	if len(phase.LaunchIDs) != 1 || phase.LaunchIDs[0] != "launch-plan-review-shutdown-retry" {
 		t.Fatalf("launch ids = %#v", phase.LaunchIDs)
 	}
 }

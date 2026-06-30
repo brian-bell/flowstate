@@ -2,6 +2,7 @@ package runtimejobs_test
 
 import (
 	"context"
+	"errors"
 	"os/exec"
 	"strings"
 	"sync"
@@ -96,11 +97,12 @@ func TestRegistryStartDetachesRuntimeJobFromCallerCancellation(t *testing.T) {
 	}
 }
 
-func TestRegistryCancelBeforeRunStartsDoesNotBuildCommand(t *testing.T) {
-	buildCalled := make(chan struct{}, 1)
+func TestRegistryCancelWhileCommandBuildIsInProgressMarksJobCanceled(t *testing.T) {
+	buildEntered := make(chan struct{})
 	registry := runtimejobs.NewRegistry(runtimejobs.Options{
 		BuildCommand: func(ctx context.Context, launch actions.AgentLaunchContext) (*exec.Cmd, error) {
-			buildCalled <- struct{}{}
+			close(buildEntered)
+			<-ctx.Done()
 			return exec.CommandContext(ctx, "/bin/sh", "-c", "true"), nil
 		},
 	})
@@ -118,13 +120,19 @@ func TestRegistryCancelBeforeRunStartsDoesNotBuildCommand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
-	registry.Cancel(snapshot.ID)
-	waitForJobStatus(t, registry, snapshot.ID, runtimejobs.StatusCanceled)
-
 	select {
-	case <-buildCalled:
-		t.Fatal("BuildCommand called after job was canceled")
-	case <-time.After(50 * time.Millisecond):
+	case <-buildEntered:
+	case <-time.After(time.Second):
+		t.Fatal("BuildCommand did not start")
+	}
+
+	result := registry.Cancel(snapshot.ID)
+	if !result.Found || !result.Transition || result.Code != runtimejobs.CancelCanceled {
+		t.Fatalf("Cancel() = %#v, want canceled transition", result)
+	}
+	final := waitForJobStatus(t, registry, snapshot.ID, runtimejobs.StatusCanceled)
+	if final.Error != "runtime job canceled: user requested cancellation" {
+		t.Fatalf("canceled error = %q, want user cancellation reason", final.Error)
 	}
 }
 
@@ -173,12 +181,59 @@ func TestRegistryActiveRuntimeJobRequiresCurrentPhaseLaunchID(t *testing.T) {
 	}
 }
 
-func TestRegistryCancelStopsJobWithoutMarkingPhaseNeedsAttention(t *testing.T) {
+func TestRegistryCancelRejectsInvalidUnknownAndTerminalJobs(t *testing.T) {
+	registry := runtimejobs.NewRegistry(runtimejobs.Options{
+		BuildCommand: func(ctx context.Context, launch actions.AgentLaunchContext) (*exec.Cmd, error) {
+			return exec.CommandContext(ctx, "/bin/sh", "-c", "true"), nil
+		},
+	})
+
+	if result := registry.Cancel(" \t "); result.Found || result.Transition || result.Code != runtimejobs.CancelInvalidID {
+		t.Fatalf("Cancel(blank) = %#v, want invalid id", result)
+	}
+	if result := registry.Cancel("missing"); result.Found || result.Transition || result.Code != runtimejobs.CancelNotFound {
+		t.Fatalf("Cancel(missing) = %#v, want not found", result)
+	}
+
+	snapshot, err := registry.Start(context.Background(), runtimejobs.StartRequest{
+		FlowID:   "flow-1",
+		PhaseID:  "implementation",
+		LaunchID: "launch-1",
+		Context: actions.AgentLaunchContext{
+			FlowID:      "flow-1",
+			FlowPhaseID: "implementation",
+			LaunchID:    "launch-1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	final := waitForJobStatus(t, registry, snapshot.ID, runtimejobs.StatusSucceeded)
+	repeated := registry.Cancel(snapshot.ID)
+	if !repeated.Found || repeated.Transition || repeated.Code != runtimejobs.CancelAlreadyTerminal {
+		t.Fatalf("Cancel(terminal) = %#v, want already terminal", repeated)
+	}
+	if !repeated.Snapshot.EndedAt.Equal(*final.EndedAt) || repeated.Snapshot.Error != final.Error || repeated.Snapshot.Status != final.Status {
+		t.Fatalf("terminal snapshot mutated from %#v to %#v", final, repeated.Snapshot)
+	}
+}
+
+func TestRegistryCancelMarksMatchingRunningPhaseNeedsAttention(t *testing.T) {
 	var mu sync.Mutex
 	var phaseUpdates []flowstore.PhaseUpdate
 	registry := runtimejobs.NewRegistry(runtimejobs.Options{
 		BuildCommand: func(ctx context.Context, launch actions.AgentLaunchContext) (*exec.Cmd, error) {
 			return exec.CommandContext(ctx, "/bin/sh", "-c", "sleep 5"), nil
+		},
+		ReadFlow: func(flowID string) (flowstore.FlowRecord, error) {
+			return flowstore.FlowRecord{
+				FlowID: flowID,
+				Phases: []flowstore.FlowPhase{{
+					PhaseID:   "implementation",
+					Status:    flowstore.PhaseRunning,
+					LaunchIDs: []string{"launch-1"},
+				}},
+			}, nil
 		},
 		UpdatePhase: func(update flowstore.PhaseUpdate) (flowstore.FlowRecord, error) {
 			mu.Lock()
@@ -203,25 +258,150 @@ func TestRegistryCancelStopsJobWithoutMarkingPhaseNeedsAttention(t *testing.T) {
 	}
 
 	canceled := registry.Cancel(snapshot.ID)
-	if !canceled.Found || !canceled.Transition || canceled.Snapshot.Status != runtimejobs.StatusCanceled || canceled.Snapshot.EndedAt == nil {
+	if !canceled.Found || !canceled.Transition || canceled.Code != runtimejobs.CancelCanceled ||
+		canceled.Snapshot.Status != runtimejobs.StatusCanceled || canceled.Snapshot.EndedAt == nil {
 		t.Fatalf("Cancel() = %#v; want transitioned canceled snapshot", canceled)
 	}
 	final := waitForJobStatus(t, registry, snapshot.ID, runtimejobs.StatusCanceled)
-	if final.Error != "runtime job canceled" {
+	if final.Error != "runtime job canceled: user requested cancellation" {
 		t.Fatalf("canceled error = %q, want cancellation reason", final.Error)
 	}
 
-	time.Sleep(50 * time.Millisecond)
+	waitForPhaseUpdates(t, &mu, &phaseUpdates, 1)
 	mu.Lock()
 	defer mu.Unlock()
-	if len(phaseUpdates) != 0 {
-		t.Fatalf("phase updates = %#v, want cancel to avoid needs_attention", phaseUpdates)
+	if len(phaseUpdates) != 1 ||
+		phaseUpdates[0].FlowID != "flow-1" ||
+		phaseUpdates[0].PhaseID != "implementation" ||
+		phaseUpdates[0].Status != flowstore.PhaseNeedsAttention ||
+		phaseUpdates[0].ExpectedStatus != flowstore.PhaseRunning ||
+		phaseUpdates[0].ExpectedLatestLaunchID != snapshot.LaunchID ||
+		phaseUpdates[0].Outcome != "runtime_canceled" ||
+		!strings.Contains(phaseUpdates[0].Notes, snapshot.ID) {
+		t.Fatalf("phase updates = %#v, want runtime_canceled needs_attention for matching launch", phaseUpdates)
 	}
 }
 
-func TestRegistryCancelAllResetsAwaitingSessionPhase(t *testing.T) {
+func TestRegistryCancelPlanReviewUsesChangesRequestedOutcome(t *testing.T) {
 	var mu sync.Mutex
-	var resets []flowstore.PhaseResetUpdate
+	var phaseUpdates []flowstore.PhaseUpdate
+	registry := runtimejobs.NewRegistry(runtimejobs.Options{
+		BuildCommand: func(ctx context.Context, launch actions.AgentLaunchContext) (*exec.Cmd, error) {
+			return exec.CommandContext(ctx, "/bin/sh", "-c", "sleep 5"), nil
+		},
+		ReadFlow: func(flowID string) (flowstore.FlowRecord, error) {
+			return flowstore.FlowRecord{
+				FlowID: flowID,
+				Phases: []flowstore.FlowPhase{{
+					PhaseID:   "plan-review",
+					Status:    flowstore.PhaseRunning,
+					LaunchIDs: []string{"launch-1"},
+				}},
+			}, nil
+		},
+		UpdatePhase: func(update flowstore.PhaseUpdate) (flowstore.FlowRecord, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			phaseUpdates = append(phaseUpdates, update)
+			return flowstore.FlowRecord{}, nil
+		},
+	})
+
+	snapshot, err := registry.Start(context.Background(), runtimejobs.StartRequest{
+		FlowID:   "flow-1",
+		PhaseID:  "plan-review",
+		LaunchID: "launch-1",
+		Context: actions.AgentLaunchContext{
+			FlowID:      "flow-1",
+			FlowPhaseID: "plan-review",
+			LaunchID:    "launch-1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	waitForJobStatus(t, registry, snapshot.ID, runtimejobs.StatusRunning)
+
+	registry.Cancel(snapshot.ID)
+	waitForJobStatus(t, registry, snapshot.ID, runtimejobs.StatusCanceled)
+	waitForPhaseUpdates(t, &mu, &phaseUpdates, 1)
+	mu.Lock()
+	defer mu.Unlock()
+	if len(phaseUpdates) != 1 ||
+		phaseUpdates[0].PhaseID != "plan-review" ||
+		phaseUpdates[0].Outcome != flowstore.OutcomeChangesRequested ||
+		phaseUpdates[0].Status != flowstore.PhaseNeedsAttention ||
+		phaseUpdates[0].ExpectedStatus != flowstore.PhaseRunning ||
+		phaseUpdates[0].ExpectedLatestLaunchID != snapshot.LaunchID {
+		t.Fatalf("phase updates = %#v, want plan-review changes_requested needs_attention", phaseUpdates)
+	}
+}
+
+func TestRegistryCancelSkipsPhaseUpdateWhenPhaseAdvancedOrRelaunched(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		status   string
+		launchID string
+	}{
+		{name: "completed", status: flowstore.PhaseCompleted, launchID: "launch-1"},
+		{name: "blocked", status: flowstore.PhaseBlocked, launchID: "launch-1"},
+		{name: "skipped", status: flowstore.PhaseSkipped, launchID: "launch-1"},
+		{name: "needs attention", status: flowstore.PhaseNeedsAttention, launchID: "launch-1"},
+		{name: "new launch", status: flowstore.PhaseRunning, launchID: "launch-2"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var mu sync.Mutex
+			var phaseUpdates []flowstore.PhaseUpdate
+			registry := runtimejobs.NewRegistry(runtimejobs.Options{
+				BuildCommand: func(ctx context.Context, launch actions.AgentLaunchContext) (*exec.Cmd, error) {
+					return exec.CommandContext(ctx, "/bin/sh", "-c", "sleep 5"), nil
+				},
+				ReadFlow: func(flowID string) (flowstore.FlowRecord, error) {
+					return flowstore.FlowRecord{
+						FlowID: flowID,
+						Phases: []flowstore.FlowPhase{{
+							PhaseID:   "implementation",
+							Status:    tc.status,
+							LaunchIDs: []string{tc.launchID},
+						}},
+					}, nil
+				},
+				UpdatePhase: func(update flowstore.PhaseUpdate) (flowstore.FlowRecord, error) {
+					mu.Lock()
+					defer mu.Unlock()
+					phaseUpdates = append(phaseUpdates, update)
+					return flowstore.FlowRecord{}, nil
+				},
+			})
+
+			snapshot, err := registry.Start(context.Background(), runtimejobs.StartRequest{
+				FlowID:   "flow-1",
+				PhaseID:  "implementation",
+				LaunchID: "launch-1",
+				Context: actions.AgentLaunchContext{
+					FlowID:      "flow-1",
+					FlowPhaseID: "implementation",
+					LaunchID:    "launch-1",
+				},
+			})
+			if err != nil {
+				t.Fatalf("Start() error = %v", err)
+			}
+			waitForJobStatus(t, registry, snapshot.ID, runtimejobs.StatusRunning)
+			registry.Cancel(snapshot.ID)
+			waitForJobStatus(t, registry, snapshot.ID, runtimejobs.StatusCanceled)
+			time.Sleep(50 * time.Millisecond)
+
+			mu.Lock()
+			defer mu.Unlock()
+			if len(phaseUpdates) != 0 {
+				t.Fatalf("phase updates = %#v, want none", phaseUpdates)
+			}
+		})
+	}
+}
+
+func TestRegistryCancelRecordsPhaseUpdateFailureOnSnapshot(t *testing.T) {
 	registry := runtimejobs.NewRegistry(runtimejobs.Options{
 		BuildCommand: func(ctx context.Context, launch actions.AgentLaunchContext) (*exec.Cmd, error) {
 			return exec.CommandContext(ctx, "/bin/sh", "-c", "sleep 5"), nil
@@ -236,10 +416,53 @@ func TestRegistryCancelAllResetsAwaitingSessionPhase(t *testing.T) {
 				}},
 			}, nil
 		},
-		ResetPhase: func(update flowstore.PhaseResetUpdate) (flowstore.FlowRecord, error) {
+		UpdatePhase: func(update flowstore.PhaseUpdate) (flowstore.FlowRecord, error) {
+			return flowstore.FlowRecord{}, errors.New("store locked")
+		},
+	})
+
+	snapshot, err := registry.Start(context.Background(), runtimejobs.StartRequest{
+		FlowID:   "flow-1",
+		PhaseID:  "implementation",
+		LaunchID: "launch-1",
+		Context: actions.AgentLaunchContext{
+			FlowID:      "flow-1",
+			FlowPhaseID: "implementation",
+			LaunchID:    "launch-1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	waitForJobStatus(t, registry, snapshot.ID, runtimejobs.StatusRunning)
+	result := registry.Cancel(snapshot.ID)
+	if result.Snapshot.Status != runtimejobs.StatusCanceled ||
+		!strings.Contains(result.Snapshot.PhaseUpdateError, "store locked") {
+		t.Fatalf("Cancel() = %#v, want canceled snapshot with phase update error", result)
+	}
+}
+
+func TestRegistryCancelAllMarksMatchingRunningPhaseNeedsAttention(t *testing.T) {
+	var mu sync.Mutex
+	var phaseUpdates []flowstore.PhaseUpdate
+	registry := runtimejobs.NewRegistry(runtimejobs.Options{
+		BuildCommand: func(ctx context.Context, launch actions.AgentLaunchContext) (*exec.Cmd, error) {
+			return exec.CommandContext(ctx, "/bin/sh", "-c", "sleep 5"), nil
+		},
+		ReadFlow: func(flowID string) (flowstore.FlowRecord, error) {
+			return flowstore.FlowRecord{
+				FlowID: flowID,
+				Phases: []flowstore.FlowPhase{{
+					PhaseID:   "implementation",
+					Status:    flowstore.PhaseRunning,
+					LaunchIDs: []string{"launch-1"},
+				}},
+			}, nil
+		},
+		UpdatePhase: func(update flowstore.PhaseUpdate) (flowstore.FlowRecord, error) {
 			mu.Lock()
 			defer mu.Unlock()
-			resets = append(resets, update)
+			phaseUpdates = append(phaseUpdates, update)
 			return flowstore.FlowRecord{}, nil
 		},
 	})
@@ -260,11 +483,21 @@ func TestRegistryCancelAllResetsAwaitingSessionPhase(t *testing.T) {
 	waitForJobStatus(t, registry, snapshot.ID, runtimejobs.StatusRunning)
 
 	registry.CancelAll()
-	waitForJobStatus(t, registry, snapshot.ID, runtimejobs.StatusCanceled)
+	final := waitForJobStatus(t, registry, snapshot.ID, runtimejobs.StatusCanceled)
+	if final.Error != "runtime job canceled: server shutting down" {
+		t.Fatalf("shutdown cancel error = %q", final.Error)
+	}
 	mu.Lock()
 	defer mu.Unlock()
-	if len(resets) != 1 || resets[0].FlowID != "flow-1" || resets[0].PhaseID != "implementation" {
-		t.Fatalf("phase resets = %#v, want shutdown reset for awaiting-session phase", resets)
+	if len(phaseUpdates) != 1 ||
+		phaseUpdates[0].FlowID != "flow-1" ||
+		phaseUpdates[0].PhaseID != "implementation" ||
+		phaseUpdates[0].Status != flowstore.PhaseNeedsAttention ||
+		phaseUpdates[0].Outcome != "runtime_canceled" ||
+		phaseUpdates[0].ExpectedStatus != flowstore.PhaseRunning ||
+		phaseUpdates[0].ExpectedLatestLaunchID != snapshot.LaunchID ||
+		!strings.Contains(phaseUpdates[0].Notes, "server shut down") {
+		t.Fatalf("phase updates = %#v, want recoverable shutdown cancellation", phaseUpdates)
 	}
 }
 
@@ -325,7 +558,9 @@ func TestRegistryNonZeroExitMarksPhaseNeedsAttention(t *testing.T) {
 	if len(phaseUpdates) != 1 ||
 		phaseUpdates[0].FlowID != "flow-1" ||
 		phaseUpdates[0].PhaseID != "implementation" ||
-		phaseUpdates[0].Status != flowstore.PhaseNeedsAttention {
+		phaseUpdates[0].Status != flowstore.PhaseNeedsAttention ||
+		phaseUpdates[0].ExpectedStatus != flowstore.PhaseRunning ||
+		phaseUpdates[0].ExpectedLatestLaunchID != snapshot.LaunchID {
 		t.Fatalf("phase updates = %#v, want one needs_attention update", phaseUpdates)
 	}
 }
@@ -436,6 +671,8 @@ func TestRegistryPlanReviewNonZeroExitUsesChangesRequestedOutcome(t *testing.T) 
 		phaseUpdates[0].PhaseID != "plan-review" ||
 		phaseUpdates[0].Status != flowstore.PhaseNeedsAttention ||
 		phaseUpdates[0].Outcome != flowstore.OutcomeChangesRequested ||
+		phaseUpdates[0].ExpectedStatus != flowstore.PhaseRunning ||
+		phaseUpdates[0].ExpectedLatestLaunchID != snapshot.LaunchID ||
 		phaseUpdates[0].Notes == "" {
 		t.Fatalf("phase updates = %#v, want plan-review changes_requested needs_attention", phaseUpdates)
 	}
@@ -454,4 +691,21 @@ func waitForJobStatus(t *testing.T, registry *runtimejobs.Registry, id string, s
 	snapshot, _ := registry.Lookup(id)
 	t.Fatalf("job %s did not reach %s; latest = %#v", id, status, snapshot)
 	return runtimejobs.Snapshot{}
+}
+
+func waitForPhaseUpdates(t *testing.T, mu *sync.Mutex, updates *[]flowstore.PhaseUpdate, count int) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		got := len(*updates)
+		mu.Unlock()
+		if got >= count {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	t.Fatalf("phase updates = %#v, want at least %d", *updates, count)
 }

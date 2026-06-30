@@ -182,6 +182,9 @@ func PhaseCanLaunch(record flowstore.FlowRecord, phase flowstore.FlowPhase) bool
 	if phase.Status == flowstore.PhaseReady {
 		return true
 	}
+	if flowstore.PhaseRuntimeRecoveryLaunchable(phase) && flowstore.PhasePredecessorsSatisfied(record, phase.PhaseID) {
+		return true
+	}
 	return artifacts.NormalizePhaseID(phase.PhaseID) == "autoreview" &&
 		(phase.Status == flowstore.PhaseNeedsAttention || phase.Status == flowstore.PhaseBlocked) &&
 		flowstore.HasPRTarget(record.PR) &&

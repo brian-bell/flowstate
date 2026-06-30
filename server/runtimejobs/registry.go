@@ -32,25 +32,31 @@ const (
 	defaultMaxLogBytes  = 64 * 1024
 	defaultMaxLogLines  = 400
 	defaultCompletedTTL = 10 * time.Minute
+	defaultCancelGrace  = 2 * time.Second
+)
+
+const (
+	runtimeCancelUserRequest    = "runtime job canceled: user requested cancellation"
+	runtimeCancelServerShutdown = "runtime job canceled: server shutting down"
 )
 
 type CommandBuilder func(context.Context, actions.AgentLaunchContext) (*exec.Cmd, error)
 
 type FlowReader func(string) (flowstore.FlowRecord, error)
 
-type PhaseResetter func(flowstore.PhaseResetUpdate) (flowstore.FlowRecord, error)
-
 type PhaseUpdater func(flowstore.PhaseUpdate) (flowstore.FlowRecord, error)
+
+var terminateRuntimeCommandFunc = terminateRuntimeCommand
 
 type Options struct {
 	MaxLogBytes  int
 	MaxLogLines  int
 	CompletedTTL time.Duration
 	WaitDelay    time.Duration
+	CancelGrace  time.Duration
 	Now          func() time.Time
 	BuildCommand CommandBuilder
 	ReadFlow     FlowReader
-	ResetPhase   PhaseResetter
 	UpdatePhase  PhaseUpdater
 }
 
@@ -81,7 +87,16 @@ type CancelResult struct {
 	Snapshot   Snapshot
 	Found      bool
 	Transition bool
+	Code       string
 }
+
+const (
+	CancelInvalidID         = "invalid_id"
+	CancelNotFound          = "not_found"
+	CancelAlreadyTerminal   = "already_terminal"
+	CancelCanceled          = "canceled"
+	CancelTerminationFailed = "termination_failed"
+)
 
 type Registry struct {
 	mu           sync.RWMutex
@@ -90,10 +105,10 @@ type Registry struct {
 	maxLogLines  int
 	completedTTL time.Duration
 	waitDelay    time.Duration
+	cancelGrace  time.Duration
 	now          func() time.Time
 	buildCommand CommandBuilder
 	readFlow     FlowReader
-	resetPhase   PhaseResetter
 	updatePhase  PhaseUpdater
 	nextID       atomic.Uint64
 }
@@ -102,6 +117,9 @@ type job struct {
 	snapshot Snapshot
 	tail     logTail
 	cancel   context.CancelFunc
+	startMu  sync.Mutex
+	cmd      *exec.Cmd
+	done     chan struct{}
 }
 
 func NewRegistry(opts Options) *Registry {
@@ -117,6 +135,10 @@ func NewRegistry(opts Options) *Registry {
 	if completedTTL <= 0 {
 		completedTTL = defaultCompletedTTL
 	}
+	cancelGrace := opts.CancelGrace
+	if cancelGrace <= 0 {
+		cancelGrace = defaultCancelGrace
+	}
 	now := opts.Now
 	if now == nil {
 		now = time.Now
@@ -131,10 +153,10 @@ func NewRegistry(opts Options) *Registry {
 		maxLogLines:  maxLogLines,
 		completedTTL: completedTTL,
 		waitDelay:    opts.WaitDelay,
+		cancelGrace:  cancelGrace,
 		now:          now,
 		buildCommand: buildCommand,
 		readFlow:     opts.ReadFlow,
-		resetPhase:   opts.ResetPhase,
 		updatePhase:  opts.UpdatePhase,
 	}
 }
@@ -175,6 +197,7 @@ func (r *Registry) Start(ctx context.Context, req StartRequest) (Snapshot, error
 		},
 		tail:   logTail{maxBytes: r.maxLogBytes, maxLines: r.maxLogLines},
 		cancel: cancel,
+		done:   make(chan struct{}),
 	}
 	r.mu.Lock()
 	r.evictExpiredLocked(createdAt)
@@ -198,32 +221,7 @@ func (r *Registry) Lookup(id string) (Snapshot, bool) {
 }
 
 func (r *Registry) Cancel(id string) CancelResult {
-	trimmed := strings.TrimSpace(id)
-	if trimmed == "" {
-		return CancelResult{}
-	}
-	now := r.now()
-	r.mu.Lock()
-	j, ok := r.jobs[trimmed]
-	if !ok {
-		r.mu.Unlock()
-		return CancelResult{}
-	}
-	if terminal(j.snapshot.Status) {
-		snapshot := j.snapshot
-		r.mu.Unlock()
-		return CancelResult{Snapshot: snapshot, Found: true}
-	}
-	j.snapshot.Status = StatusCanceled
-	j.snapshot.EndedAt = &now
-	j.snapshot.Error = "runtime job canceled"
-	cancel := j.cancel
-	snapshot := j.snapshot
-	r.mu.Unlock()
-	if cancel != nil {
-		cancel()
-	}
-	return CancelResult{Snapshot: snapshot, Found: true, Transition: true}
+	return r.cancelJob(id, runtimeCancelUserRequest, true)
 }
 
 func (r *Registry) CancelAll() {
@@ -234,11 +232,61 @@ func (r *Registry) CancelAll() {
 	}
 	r.mu.RUnlock()
 	for _, id := range ids {
-		result := r.Cancel(id)
-		if result.Transition && result.Snapshot.Status == StatusCanceled {
-			r.resetCanceledAwaitingSessionPhase(result.Snapshot)
-		}
+		r.cancelJob(id, runtimeCancelServerShutdown, true)
 	}
+}
+
+func (r *Registry) cancelJob(id, reason string, updatePhase bool) CancelResult {
+	trimmed := strings.TrimSpace(id)
+	if trimmed == "" {
+		return CancelResult{Code: CancelInvalidID}
+	}
+	now := r.now()
+	r.mu.Lock()
+	j, ok := r.jobs[trimmed]
+	if !ok {
+		r.mu.Unlock()
+		return CancelResult{Code: CancelNotFound}
+	}
+	if terminal(j.snapshot.Status) {
+		snapshot := j.snapshot
+		r.mu.Unlock()
+		return CancelResult{Snapshot: snapshot, Found: true, Code: CancelAlreadyTerminal}
+	}
+	previous := j.snapshot
+	j.snapshot.Status = StatusCanceled
+	j.snapshot.EndedAt = &now
+	j.snapshot.Error = reason
+	cancel := j.cancel
+	done := j.done
+	snapshot := j.snapshot
+	r.mu.Unlock()
+
+	terminationConfirmed := true
+	j.startMu.Lock()
+	cmd := j.cmd
+	if cmd != nil && cmd.Process != nil {
+		if err := terminateRuntimeCommandFunc(cmd, done, r.cancelGrace); err != nil {
+			snapshot = r.restoreFailedCancel(snapshot.ID, previous, fmt.Sprintf("terminate runtime process group: %v", err))
+			terminationConfirmed = false
+		}
+		if terminationConfirmed && cancel != nil {
+			cancel()
+		}
+	} else if cancel != nil {
+		cancel()
+	}
+	j.startMu.Unlock()
+	if updatePhase && terminationConfirmed {
+		r.markCanceledNeedsAttention(snapshot)
+	}
+	if updated, ok := r.Lookup(trimmed); ok {
+		snapshot = updated
+	}
+	if !terminationConfirmed {
+		return CancelResult{Snapshot: snapshot, Found: true, Code: CancelTerminationFailed}
+	}
+	return CancelResult{Snapshot: snapshot, Found: true, Transition: true, Code: CancelCanceled}
 }
 
 func (r *Registry) ActiveRuntimeJob(record flowstore.FlowRecord, phase flowstore.FlowPhase) (*flowquery.RuntimeJob, error) {
@@ -293,6 +341,7 @@ func (r *Registry) evictExpiredLocked(now time.Time) {
 }
 
 func (r *Registry) run(ctx context.Context, id string, launch actions.AgentLaunchContext) {
+	defer r.closeDone(id)
 	if !r.setStatus(id, StatusStarting, nil) {
 		return
 	}
@@ -301,19 +350,26 @@ func (r *Registry) run(ctx context.Context, id string, launch actions.AgentLaunc
 		r.fail(id, nil, fmt.Errorf("build agent command: %w", err), launch)
 		return
 	}
+	configureRuntimeCommand(cmd)
 	if r.waitDelay > 0 {
 		cmd.WaitDelay = r.waitDelay
 	}
 	writer := r.writer(id)
 	cmd.Stdout = writer
 	cmd.Stderr = writer
-	if err := cmd.Start(); err != nil {
-		r.fail(id, nil, fmt.Errorf("start agent command: %w", err), launch)
+	started, err := r.startCommand(id, cmd)
+	if !started {
+		return
+	}
+	if err != nil {
+		if !r.snapshotIsCanceled(id) {
+			r.fail(id, nil, fmt.Errorf("start agent command: %w", err), launch)
+		}
 		return
 	}
 	startedAt := r.now()
 	if !r.setStatus(id, StatusRunning, &startedAt) {
-		_ = cmd.Wait()
+		_ = terminateStartedRuntimeCommand(cmd, r.cancelGrace)
 		return
 	}
 	err = cmd.Wait()
@@ -324,6 +380,45 @@ func (r *Registry) run(ctx context.Context, id string, launch actions.AgentLaunc
 	}
 	code := exitCode(err)
 	r.fail(id, code, err, launch)
+}
+
+func (r *Registry) startCommand(id string, cmd *exec.Cmd) (bool, error) {
+	r.mu.RLock()
+	j, ok := r.jobs[id]
+	r.mu.RUnlock()
+	if !ok {
+		return false, nil
+	}
+	j.startMu.Lock()
+	defer j.startMu.Unlock()
+
+	r.mu.Lock()
+	current, ok := r.jobs[id]
+	if !ok || terminal(j.snapshot.Status) {
+		r.mu.Unlock()
+		return false, nil
+	}
+	current.cmd = cmd
+	r.mu.Unlock()
+
+	return true, cmd.Start()
+}
+
+func (r *Registry) snapshotIsCanceled(id string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	j, ok := r.jobs[id]
+	return ok && j.snapshot.Status == StatusCanceled
+}
+
+func (r *Registry) closeDone(id string) {
+	r.mu.Lock()
+	j, ok := r.jobs[id]
+	if ok && j.done != nil {
+		close(j.done)
+		j.done = nil
+	}
+	r.mu.Unlock()
 }
 
 func (r *Registry) writer(id string) io.Writer {
@@ -394,11 +489,13 @@ func (r *Registry) markNeedsAttention(id, errText string) {
 		return
 	}
 	_, err := r.updatePhase(flowstore.PhaseUpdate{
-		FlowID:  snapshot.FlowID,
-		PhaseID: snapshot.PhaseID,
-		Status:  flowstore.PhaseNeedsAttention,
-		Outcome: runtimeFailureOutcome(snapshot.PhaseID),
-		Notes:   "Runtime job failed: " + errText,
+		FlowID:                 snapshot.FlowID,
+		PhaseID:                snapshot.PhaseID,
+		Status:                 flowstore.PhaseNeedsAttention,
+		Outcome:                runtimeFailureOutcome(snapshot.PhaseID),
+		Notes:                  "Runtime job failed: " + errText,
+		ExpectedStatus:         flowstore.PhaseRunning,
+		ExpectedLatestLaunchID: snapshot.LaunchID,
 	})
 	if err == nil {
 		return
@@ -417,13 +514,13 @@ func runtimeFailureOutcome(phaseID string) string {
 	return "runtime_failed"
 }
 
-func (r *Registry) resetCanceledAwaitingSessionPhase(snapshot Snapshot) {
-	if r.readFlow == nil || r.resetPhase == nil {
+func (r *Registry) markCanceledNeedsAttention(snapshot Snapshot) {
+	if r.readFlow == nil || r.updatePhase == nil {
 		return
 	}
 	record, err := r.readFlow(snapshot.FlowID)
 	if err != nil {
-		r.setPhaseUpdateError(snapshot.ID, fmt.Sprintf("read flow before cancel reset: %v", err))
+		r.setPhaseUpdateError(snapshot.ID, fmt.Sprintf("read flow before runtime cancel update: %v", err))
 		return
 	}
 	phase, ok := phaseByID(record, snapshot.PhaseID)
@@ -431,18 +528,34 @@ func (r *Registry) resetCanceledAwaitingSessionPhase(snapshot Snapshot) {
 		r.setPhaseUpdateError(snapshot.ID, fmt.Sprintf("phase %q not found in flow %q", snapshot.PhaseID, snapshot.FlowID))
 		return
 	}
-	if phase.Status != flowstore.PhaseRunning ||
-		flowstore.LatestPhaseLaunchID(phase) != snapshot.LaunchID ||
-		!flowstore.PhaseAwaitingSession(phase) ||
-		flowstore.PhaseSessionLaunchMismatch(phase) {
+	if phase.Status != flowstore.PhaseRunning || flowstore.LatestPhaseLaunchID(phase) != snapshot.LaunchID {
 		return
 	}
-	if _, err := r.resetPhase(flowstore.PhaseResetUpdate{
-		FlowID:  snapshot.FlowID,
-		PhaseID: snapshot.PhaseID,
+	if _, err := r.updatePhase(flowstore.PhaseUpdate{
+		FlowID:                 snapshot.FlowID,
+		PhaseID:                snapshot.PhaseID,
+		Status:                 flowstore.PhaseNeedsAttention,
+		Outcome:                runtimeCanceledOutcome(snapshot.PhaseID),
+		Notes:                  runtimeCanceledNotes(snapshot),
+		ExpectedStatus:         flowstore.PhaseRunning,
+		ExpectedLatestLaunchID: snapshot.LaunchID,
 	}); err != nil {
-		r.setPhaseUpdateError(snapshot.ID, fmt.Sprintf("reset phase after cancel: %v", err))
+		r.setPhaseUpdateError(snapshot.ID, fmt.Sprintf("update phase after runtime cancel: %v", err))
 	}
+}
+
+func runtimeCanceledOutcome(phaseID string) string {
+	if artifacts.NormalizePhaseID(phaseID) == "plan-review" {
+		return flowstore.OutcomeChangesRequested
+	}
+	return "runtime_canceled"
+}
+
+func runtimeCanceledNotes(snapshot Snapshot) string {
+	if snapshot.Error == runtimeCancelServerShutdown {
+		return fmt.Sprintf("Runtime job %s canceled because the server shut down.", snapshot.ID)
+	}
+	return fmt.Sprintf("Runtime job %s canceled by user request.", snapshot.ID)
 }
 
 func (r *Registry) phaseStillActiveForFailure(snapshot Snapshot) bool {
@@ -468,6 +581,39 @@ func (r *Registry) setPhaseUpdateError(id, errText string) {
 	if j, ok := r.jobs[id]; ok {
 		j.snapshot.PhaseUpdateError = errText
 	}
+}
+
+func (r *Registry) appendJobError(id, errText string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if j, ok := r.jobs[id]; ok {
+		j.snapshot.Error = appendErrorText(j.snapshot.Error, errText)
+	}
+}
+
+func (r *Registry) restoreFailedCancel(id string, previous Snapshot, errText string) Snapshot {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	j, ok := r.jobs[id]
+	if !ok {
+		previous.Error = appendErrorText(previous.Error, errText)
+		return previous
+	}
+	j.snapshot.Status = previous.Status
+	j.snapshot.EndedAt = previous.EndedAt
+	j.snapshot.ExitCode = previous.ExitCode
+	j.snapshot.Error = appendErrorText(previous.Error, errText)
+	return j.snapshot
+}
+
+func appendErrorText(existing, errText string) string {
+	if existing == "" {
+		return errText
+	}
+	if strings.Contains(existing, errText) {
+		return existing
+	}
+	return existing + "; " + errText
 }
 
 func phaseByID(record flowstore.FlowRecord, phaseID string) (flowstore.FlowPhase, bool) {

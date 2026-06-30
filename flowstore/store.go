@@ -188,12 +188,14 @@ type FlowFilter struct {
 
 // PhaseUpdate describes one persisted phase status update.
 type PhaseUpdate struct {
-	FlowID  string
-	PhaseID string
-	Status  string
-	Outcome string
-	Notes   string
-	Summary string
+	FlowID                 string
+	PhaseID                string
+	Status                 string
+	Outcome                string
+	Notes                  string
+	Summary                string
+	ExpectedStatus         string
+	ExpectedLatestLaunchID string
 }
 
 // PhaseRestartUpdate restarts a blocked or needs-attention phase as running.
@@ -384,6 +386,9 @@ func (s *Store) SetPhase(update PhaseUpdate) (FlowRecord, error) {
 	now := s.now()
 	phase := record.Phases[phaseIndex]
 	originalStatus := phase.Status
+	if err := validatePhaseUpdateExpectations(phase, update); err != nil {
+		return FlowRecord{}, err
+	}
 	if err := validatePhaseUpdate(phase, update); err != nil {
 		return FlowRecord{}, err
 	}
@@ -820,10 +825,33 @@ func phaseLaunchableForFreshStart(record FlowRecord, phase FlowPhase) bool {
 	if phase.Status == PhaseReady {
 		return true
 	}
+	if PhaseRuntimeRecoveryLaunchable(phase) && PhasePredecessorsSatisfied(record, phase.PhaseID) {
+		return true
+	}
 	return phaseID == "autoreview" &&
 		(phase.Status == PhaseNeedsAttention || phase.Status == PhaseBlocked) &&
 		HasPRTarget(record.PR) &&
 		PhasePredecessorsSatisfied(record, phase.PhaseID)
+}
+
+func PhaseRuntimeRecoveryLaunchable(phase FlowPhase) bool {
+	if phase.Status != PhaseNeedsAttention {
+		return false
+	}
+	switch phase.Outcome {
+	case "runtime_canceled", "runtime_start_failed", "runtime_failed":
+		return true
+	case OutcomeChangesRequested:
+		notes := strings.TrimSpace(phase.Notes)
+		return artifacts.NormalizePhaseID(phase.PhaseID) == "plan-review" &&
+			(strings.HasPrefix(notes, "Runtime job failed: ") ||
+				strings.HasPrefix(notes, "Runtime job failed to start: ") ||
+				(strings.HasPrefix(notes, "Runtime job ") &&
+					(strings.Contains(notes, " canceled by user request.") ||
+						strings.Contains(notes, " canceled because the server shut down."))))
+	default:
+		return false
+	}
 }
 
 func validateAutoPhaseLaunch(record FlowRecord, phase FlowPhase) error {
@@ -1137,6 +1165,19 @@ func validatePhaseUpdate(current FlowPhase, update PhaseUpdate) error {
 	restarting := current.Status == PhaseNeedsAttention || current.Status == PhaseBlocked
 	if restarting && update.Status == PhaseRunning && strings.TrimSpace(update.Notes) == "" {
 		return fmt.Errorf("restarting %s phase requires notes", current.Status)
+	}
+	return nil
+}
+
+func validatePhaseUpdateExpectations(current FlowPhase, update PhaseUpdate) error {
+	if expected := strings.TrimSpace(update.ExpectedStatus); expected != "" && current.Status != expected {
+		return fmt.Errorf("flow phase %q changed before update: status is %s, expected %s", current.PhaseID, current.Status, expected)
+	}
+	if expected := strings.TrimSpace(update.ExpectedLatestLaunchID); expected != "" {
+		actual := LatestPhaseLaunchID(current)
+		if actual != expected {
+			return fmt.Errorf("flow phase %q changed before update: latest launch id is %q, expected %q", current.PhaseID, actual, expected)
+		}
 	}
 	return nil
 }
