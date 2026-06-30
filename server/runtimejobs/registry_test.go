@@ -254,6 +254,67 @@ func TestRegistryNonZeroExitPreservesExistingPhaseUpdate(t *testing.T) {
 	}
 }
 
+func TestRegistryPlanReviewNonZeroExitUsesChangesRequestedOutcome(t *testing.T) {
+	var mu sync.Mutex
+	var phaseUpdates []flowstore.PhaseUpdate
+	registry := runtimejobs.NewRegistry(runtimejobs.Options{
+		BuildCommand: func(ctx context.Context, launch actions.AgentLaunchContext) (*exec.Cmd, error) {
+			return exec.CommandContext(ctx, "/bin/sh", "-c", "exit 7"), nil
+		},
+		ReadFlow: func(flowID string) (flowstore.FlowRecord, error) {
+			return flowstore.FlowRecord{
+				FlowID: flowID,
+				Phases: []flowstore.FlowPhase{{
+					PhaseID:   "plan-review",
+					Status:    flowstore.PhaseRunning,
+					LaunchIDs: []string{"launch-1"},
+				}},
+			}, nil
+		},
+		UpdatePhase: func(update flowstore.PhaseUpdate) (flowstore.FlowRecord, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			phaseUpdates = append(phaseUpdates, update)
+			return flowstore.FlowRecord{}, nil
+		},
+	})
+
+	snapshot, err := registry.Start(context.Background(), runtimejobs.StartRequest{
+		FlowID:   "flow-1",
+		PhaseID:  "plan-review",
+		LaunchID: "launch-1",
+		Context: actions.AgentLaunchContext{
+			FlowID:      "flow-1",
+			FlowPhaseID: "plan-review",
+			LaunchID:    "launch-1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	waitForJobStatus(t, registry, snapshot.ID, runtimejobs.StatusFailed)
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		got := len(phaseUpdates)
+		mu.Unlock()
+		if got > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(phaseUpdates) != 1 ||
+		phaseUpdates[0].PhaseID != "plan-review" ||
+		phaseUpdates[0].Status != flowstore.PhaseNeedsAttention ||
+		phaseUpdates[0].Outcome != flowstore.OutcomeChangesRequested ||
+		phaseUpdates[0].Notes == "" {
+		t.Fatalf("phase updates = %#v, want plan-review changes_requested needs_attention", phaseUpdates)
+	}
+}
+
 func waitForJobStatus(t *testing.T, registry *runtimejobs.Registry, id string, status runtimejobs.Status) runtimejobs.Snapshot {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)

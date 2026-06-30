@@ -377,7 +377,7 @@ func (r *Registry) markNeedsAttention(id, errText string) {
 		FlowID:  snapshot.FlowID,
 		PhaseID: snapshot.PhaseID,
 		Status:  flowstore.PhaseNeedsAttention,
-		Outcome: "runtime_failed",
+		Outcome: runtimeFailureOutcome(snapshot.PhaseID),
 		Notes:   "Runtime job failed: " + errText,
 	})
 	if err == nil {
@@ -388,6 +388,13 @@ func (r *Registry) markNeedsAttention(id, errText string) {
 	if j, ok := r.jobs[id]; ok {
 		j.snapshot.PhaseUpdateError = err.Error()
 	}
+}
+
+func runtimeFailureOutcome(phaseID string) string {
+	if artifacts.NormalizePhaseID(phaseID) == "plan-review" {
+		return flowstore.OutcomeChangesRequested
+	}
+	return "runtime_failed"
 }
 
 func (r *Registry) phaseStillActiveForFailure(snapshot Snapshot) bool {
