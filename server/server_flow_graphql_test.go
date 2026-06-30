@@ -1506,6 +1506,7 @@ func TestHandlerGraphQLCancelRuntimeJobStopsJobWithoutPhaseFailure(t *testing.T)
 		BuildCommand: func(ctx context.Context, launch actions.AgentLaunchContext) (*exec.Cmd, error) {
 			return exec.CommandContext(ctx, "/bin/sh", "-c", "sleep 5"), nil
 		},
+		ReadFlow:    store.Read,
 		UpdatePhase: store.SetPhase,
 	})
 	defer registry.CancelAll()
@@ -1551,7 +1552,7 @@ func TestHandlerGraphQLCancelRuntimeJobStopsJobWithoutPhaseFailure(t *testing.T)
 		t.Fatalf("cancel errors: %#v", cancel.Errors)
 	}
 	if cancel.Data.CancelRuntimeJob.Status != string(runtimejobs.StatusCanceled) ||
-		cancel.Data.CancelRuntimeJob.Error != "runtime job canceled" {
+		cancel.Data.CancelRuntimeJob.Error != "runtime job canceled: user requested cancellation" {
 		t.Fatalf("cancel payload = %#v, want canceled", cancel.Data.CancelRuntimeJob)
 	}
 	final := waitForRuntimeJobStatus(t, registry, launch.Data.LaunchFlowPhase.Job.ID, runtimejobs.StatusCanceled)
@@ -1562,25 +1563,19 @@ func TestHandlerGraphQLCancelRuntimeJobStopsJobWithoutPhaseFailure(t *testing.T)
 	if err != nil {
 		t.Fatalf("Read after cancel: %v", err)
 	}
-	if phase := phaseByIDForTest(updated, "implementation"); phase.Status != flowstore.PhaseReady {
-		t.Fatalf("cancel changed phase to %q, want ready for retry", phase.Status)
+	if phase := phaseByIDForTest(updated, "implementation"); phase.Status != flowstore.PhaseNeedsAttention ||
+		phase.Outcome != "runtime_canceled" ||
+		!strings.Contains(phase.Notes, launch.Data.LaunchFlowPhase.Job.ID) {
+		t.Fatalf("cancel changed phase to %#v, want runtime_canceled needs_attention", phase)
 	}
 
-	var retry struct {
-		Data struct {
-			LaunchFlowPhase struct {
-				Job struct {
-					ID string `json:"id"`
-				} `json:"job"`
-			} `json:"launchFlowPhase"`
-		} `json:"data"`
-		Errors []any `json:"errors"`
-	}
-	postGraphQL(t, handler, `mutation($input: LaunchFlowPhaseInput!) {
-		launchFlowPhase(input: $input) { job { id } }
-	}`, map[string]any{"input": map[string]any{"flowId": record.FlowID, "phaseId": "implementation"}}, &retry)
-	if len(retry.Errors) != 0 || retry.Data.LaunchFlowPhase.Job.ID == "" {
-		t.Fatalf("retry launch response = %#v errors %#v", retry.Data.LaunchFlowPhase, retry.Errors)
+	updated, err = store.AddPhaseLaunchID(flowstore.PhaseLaunchUpdate{
+		FlowID:   record.FlowID,
+		PhaseID:  "implementation",
+		LaunchID: "launch-retry",
+	})
+	if err != nil {
+		t.Fatalf("AddPhaseLaunchID(retry) error = %v", err)
 	}
 
 	var repeatedCancel struct {
@@ -1594,15 +1589,50 @@ func TestHandlerGraphQLCancelRuntimeJobStopsJobWithoutPhaseFailure(t *testing.T)
 	postGraphQL(t, handler, `mutation($id: ID!) {
 		cancelRuntimeJob(id: $id) { status }
 	}`, map[string]any{"id": launch.Data.LaunchFlowPhase.Job.ID}, &repeatedCancel)
-	if len(repeatedCancel.Errors) != 0 || repeatedCancel.Data.CancelRuntimeJob.Status != string(runtimejobs.StatusCanceled) {
+	if !graphQLErrorsContain(repeatedCancel.Errors, "already terminal") {
 		t.Fatalf("repeated cancel response = %#v errors %#v", repeatedCancel.Data.CancelRuntimeJob, repeatedCancel.Errors)
 	}
 	updated, err = store.Read(record.FlowID)
 	if err != nil {
 		t.Fatalf("Read after repeated cancel: %v", err)
 	}
-	if phase := phaseByIDForTest(updated, "implementation"); phase.Status != flowstore.PhaseRunning {
-		t.Fatalf("repeated old-job cancel changed phase to %q, want retry still running", phase.Status)
+	if phase := phaseByIDForTest(updated, "implementation"); phase.Status != flowstore.PhaseRunning ||
+		flowstore.LatestPhaseLaunchID(phase) != "launch-retry" {
+		t.Fatalf("repeated old-job cancel changed phase to %#v, want retry still running", phase)
+	}
+}
+
+func TestHandlerGraphQLCancelRuntimeJobRejectsInvalidAndUnknownID(t *testing.T) {
+	store, _ := newFlowGraphQLStore(t)
+	registry := runtimejobs.NewRegistry(runtimejobs.Options{ReadFlow: store.Read, UpdatePhase: store.SetPhase})
+	handler := newFlowGraphQLHandlerWithOptions(t, server.HandlerOptions{
+		FlowStore:      store,
+		RuntimeJobs:    registry,
+		RuntimeStarter: registry,
+		AgentCommand:   "codex",
+		StateRoot:      t.TempDir(),
+	})
+
+	for _, tc := range []struct {
+		name string
+		id   string
+		want string
+	}{
+		{name: "blank", id: "  ", want: "runtime job id is required"},
+		{name: "unknown", id: "job-missing", want: `runtime job "job-missing" not found`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out struct {
+				Data   any   `json:"data"`
+				Errors []any `json:"errors"`
+			}
+			postGraphQL(t, handler, `mutation($id: ID!) {
+				cancelRuntimeJob(id: $id) { id }
+			}`, map[string]any{"id": tc.id}, &out)
+			if !graphQLErrorsContain(out.Errors, tc.want) {
+				t.Fatalf("GraphQL errors = %#v, want %q", out.Errors, tc.want)
+			}
+		})
 	}
 }
 
@@ -1621,6 +1651,7 @@ func TestHandlerGraphQLCancelRuntimeJobWithAttachedSessionDoesNotReportResetErro
 		BuildCommand: func(ctx context.Context, launch actions.AgentLaunchContext) (*exec.Cmd, error) {
 			return exec.CommandContext(ctx, "/bin/sh", "-c", "sleep 5"), nil
 		},
+		ReadFlow:    store.Read,
 		UpdatePhase: store.SetPhase,
 	})
 	defer registry.CancelAll()
@@ -1680,8 +1711,9 @@ func TestHandlerGraphQLCancelRuntimeJobWithAttachedSessionDoesNotReportResetErro
 	if err != nil {
 		t.Fatalf("Read after cancel: %v", err)
 	}
-	if phase := phaseByIDForTest(updated, "implementation"); phase.Status != flowstore.PhaseRunning || flowstore.PhaseAwaitingSession(phase) {
-		t.Fatalf("attached cancel phase = %#v, want running with attached session", phase)
+	if phase := phaseByIDForTest(updated, "implementation"); phase.Status != flowstore.PhaseNeedsAttention ||
+		phase.Outcome != "runtime_canceled" {
+		t.Fatalf("attached cancel phase = %#v, want runtime_canceled needs_attention", phase)
 	}
 }
 
@@ -1700,6 +1732,7 @@ func TestHandlerGraphQLCancelRuntimeJobAfterPhaseAdvancedSkipsReset(t *testing.T
 		BuildCommand: func(ctx context.Context, launch actions.AgentLaunchContext) (*exec.Cmd, error) {
 			return exec.CommandContext(ctx, "/bin/sh", "-c", "sleep 5"), nil
 		},
+		ReadFlow:    store.Read,
 		UpdatePhase: store.SetPhase,
 	})
 	defer registry.CancelAll()

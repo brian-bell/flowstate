@@ -146,7 +146,6 @@ func Run(ctx context.Context, opts Options) error {
 	if runtimeJobs == nil && runtimeStarter == nil && runtimeController == nil {
 		registry := runtimejobs.NewRegistry(runtimejobs.Options{
 			ReadFlow:    flowStore.Read,
-			ResetPhase:  flowStore.ResetAwaitingSessionPhase,
 			UpdatePhase: flowStore.SetPhase,
 		})
 		ownedRegistry = registry
@@ -284,7 +283,6 @@ func NewHandler(opts HandlerOptions) (http.Handler, error) {
 		registryOpts := runtimejobs.Options{}
 		if flowStore != nil {
 			registryOpts.ReadFlow = flowStore.Read
-			registryOpts.ResetPhase = flowStore.ResetAwaitingSessionPhase
 			registryOpts.UpdatePhase = flowStore.SetPhase
 		}
 		registry := runtimejobs.NewRegistry(registryOpts)

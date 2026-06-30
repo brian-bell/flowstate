@@ -174,33 +174,21 @@ func (r *mutationResolver) CancelRuntimeJob(ctx context.Context, id string) (*mo
 		return nil, fmt.Errorf("runtime job controller is not configured")
 	}
 	result := r.RuntimeController.Cancel(id)
-	if !result.Found {
+	switch result.Code {
+	case runtimejobs.CancelCanceled:
+		return runtimeJobSnapshotToGraphQL(result.Snapshot), nil
+	case runtimejobs.CancelAlreadyTerminal:
+		return nil, fmt.Errorf("runtime job %q is already terminal with status %q", id, result.Snapshot.Status)
+	case runtimejobs.CancelInvalidID:
+		return nil, fmt.Errorf("runtime job id is required")
+	case runtimejobs.CancelNotFound:
 		return nil, fmt.Errorf("runtime job %q not found", id)
+	default:
+		if !result.Found {
+			return nil, fmt.Errorf("runtime job %q not found", id)
+		}
+		return nil, fmt.Errorf("runtime job %q could not be canceled", id)
 	}
-	snapshot := result.Snapshot
-	if result.Transition && snapshot.Status == runtimejobs.StatusCanceled {
-		if r.FlowStore == nil {
-			return nil, fmt.Errorf("runtime job canceled but flow store is not configured")
-		}
-		record, err := r.FlowStore.Read(snapshot.FlowID)
-		if err != nil {
-			return nil, fmt.Errorf("runtime job canceled but flow read failed: %w", err)
-		}
-		phase, ok := flowlaunch.PhaseByID(record, snapshot.PhaseID)
-		if ok &&
-			phase.Status == flowstore.PhaseRunning &&
-			flowstore.LatestPhaseLaunchID(phase) == snapshot.LaunchID &&
-			flowstore.PhaseAwaitingSession(phase) &&
-			!flowstore.PhaseSessionLaunchMismatch(phase) {
-			if _, err := r.FlowStore.ResetAwaitingSessionPhase(flowstore.PhaseResetUpdate{
-				FlowID:  snapshot.FlowID,
-				PhaseID: snapshot.PhaseID,
-			}); err != nil {
-				return nil, fmt.Errorf("runtime job canceled but phase reset failed: %w", err)
-			}
-		}
-	}
-	return runtimeJobSnapshotToGraphQL(snapshot), nil
 }
 
 // SetFlowPhaseStatus is the resolver for the setFlowPhaseStatus field.
