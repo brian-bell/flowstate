@@ -86,10 +86,11 @@ type CancelResult struct {
 }
 
 const (
-	CancelInvalidID       = "invalid_id"
-	CancelNotFound        = "not_found"
-	CancelAlreadyTerminal = "already_terminal"
-	CancelCanceled        = "canceled"
+	CancelInvalidID         = "invalid_id"
+	CancelNotFound          = "not_found"
+	CancelAlreadyTerminal   = "already_terminal"
+	CancelCanceled          = "canceled"
+	CancelTerminationFailed = "termination_failed"
 )
 
 type Registry struct {
@@ -247,6 +248,7 @@ func (r *Registry) cancelJob(id, reason string, updatePhase bool) CancelResult {
 		r.mu.Unlock()
 		return CancelResult{Snapshot: snapshot, Found: true, Code: CancelAlreadyTerminal}
 	}
+	previous := j.snapshot
 	j.snapshot.Status = StatusCanceled
 	j.snapshot.EndedAt = &now
 	j.snapshot.Error = reason
@@ -260,7 +262,7 @@ func (r *Registry) cancelJob(id, reason string, updatePhase bool) CancelResult {
 	cmd := j.cmd
 	if cmd != nil && cmd.Process != nil {
 		if err := terminateRuntimeCommandFunc(cmd, done, r.cancelGrace); err != nil {
-			r.appendJobError(snapshot.ID, fmt.Sprintf("terminate runtime process group: %v", err))
+			snapshot = r.restoreFailedCancel(snapshot.ID, previous, fmt.Sprintf("terminate runtime process group: %v", err))
 			terminationConfirmed = false
 		}
 		if cancel != nil {
@@ -275,6 +277,9 @@ func (r *Registry) cancelJob(id, reason string, updatePhase bool) CancelResult {
 	}
 	if updated, ok := r.Lookup(trimmed); ok {
 		snapshot = updated
+	}
+	if !terminationConfirmed {
+		return CancelResult{Snapshot: snapshot, Found: true, Code: CancelTerminationFailed}
 	}
 	return CancelResult{Snapshot: snapshot, Found: true, Transition: true, Code: CancelCanceled}
 }
@@ -570,12 +575,33 @@ func (r *Registry) appendJobError(id, errText string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if j, ok := r.jobs[id]; ok {
-		if j.snapshot.Error == "" {
-			j.snapshot.Error = errText
-		} else if !strings.Contains(j.snapshot.Error, errText) {
-			j.snapshot.Error += "; " + errText
-		}
+		j.snapshot.Error = appendErrorText(j.snapshot.Error, errText)
 	}
+}
+
+func (r *Registry) restoreFailedCancel(id string, previous Snapshot, errText string) Snapshot {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	j, ok := r.jobs[id]
+	if !ok {
+		previous.Error = appendErrorText(previous.Error, errText)
+		return previous
+	}
+	j.snapshot.Status = previous.Status
+	j.snapshot.EndedAt = previous.EndedAt
+	j.snapshot.ExitCode = previous.ExitCode
+	j.snapshot.Error = appendErrorText(previous.Error, errText)
+	return j.snapshot
+}
+
+func appendErrorText(existing, errText string) string {
+	if existing == "" {
+		return errText
+	}
+	if strings.Contains(existing, errText) {
+		return existing
+	}
+	return existing + "; " + errText
 }
 
 func phaseByID(record flowstore.FlowRecord, phaseID string) (flowstore.FlowPhase, bool) {

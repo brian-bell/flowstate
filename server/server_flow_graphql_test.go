@@ -1672,6 +1672,37 @@ func TestHandlerGraphQLCancelRuntimeJobAcceptsLegacySuccessfulControllerResult(t
 	}
 }
 
+func TestHandlerGraphQLCancelRuntimeJobReportsTerminationFailure(t *testing.T) {
+	runtime := &legacyCancelRuntimeProvider{
+		result: runtimejobs.CancelResult{
+			Snapshot: runtimejobs.Snapshot{
+				ID:        "job-stubborn",
+				Status:    runtimejobs.StatusRunning,
+				CreatedAt: time.Date(2026, 6, 30, 3, 0, 0, 0, time.UTC),
+				Error:     "terminate runtime process group: still running after forced kill",
+			},
+			Found: true,
+			Code:  runtimejobs.CancelTerminationFailed,
+		},
+	}
+	handler := newFlowGraphQLHandlerWithOptions(t, server.HandlerOptions{
+		RuntimeJobs:       runtime,
+		RuntimeStarter:    runtime,
+		RuntimeController: runtime,
+	})
+
+	var out struct {
+		Data   any   `json:"data"`
+		Errors []any `json:"errors"`
+	}
+	postGraphQL(t, handler, `mutation($id: ID!) {
+		cancelRuntimeJob(id: $id) { id status }
+	}`, map[string]any{"id": "job-stubborn"}, &out)
+	if !graphQLErrorsContain(out.Errors, `runtime job "job-stubborn" could not be canceled: terminate runtime process group`) {
+		t.Fatalf("GraphQL errors = %#v, want termination failure", out.Errors)
+	}
+}
+
 func TestHandlerGraphQLCancelRuntimeJobWithAttachedSessionDoesNotReportResetError(t *testing.T) {
 	store, _ := newFlowGraphQLStore(t)
 	record := createGraphQLFlow(t, store, flowstore.FlowRecord{

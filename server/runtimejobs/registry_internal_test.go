@@ -63,16 +63,23 @@ func TestRegistryCancelSkipsPhaseUpdateWhenTerminationNotConfirmed(t *testing.T)
 	waitForInternalJobStatus(t, registry, snapshot.ID, StatusRunning)
 
 	result := registry.Cancel(snapshot.ID)
-	if result.Code != CancelCanceled || result.Snapshot.Status != StatusCanceled {
-		t.Fatalf("Cancel() = %#v, want canceled job", result)
+	if result.Code != CancelTerminationFailed || result.Transition || result.Snapshot.Status != StatusRunning {
+		t.Fatalf("Cancel() = %#v, want retryable termination failure", result)
 	}
 	if !strings.Contains(result.Snapshot.Error, "still running after forced kill") {
 		t.Fatalf("Cancel() error = %q, want termination failure context", result.Snapshot.Error)
 	}
 	mu.Lock()
-	defer mu.Unlock()
 	if len(phaseUpdates) != 0 {
+		mu.Unlock()
 		t.Fatalf("phase updates = %#v, want none when termination was not confirmed", phaseUpdates)
+	}
+	mu.Unlock()
+
+	terminateRuntimeCommandFunc = originalTerminator
+	retry := registry.Cancel(snapshot.ID)
+	if retry.Code != CancelCanceled || !retry.Transition || retry.Snapshot.Status != StatusCanceled {
+		t.Fatalf("retry Cancel() = %#v, want canceled job", retry)
 	}
 }
 

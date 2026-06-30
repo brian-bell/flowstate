@@ -183,6 +183,8 @@ func (r *mutationResolver) CancelRuntimeJob(ctx context.Context, id string) (*mo
 		return nil, fmt.Errorf("runtime job id is required")
 	case runtimejobs.CancelNotFound:
 		return nil, fmt.Errorf("runtime job %q not found", id)
+	case runtimejobs.CancelTerminationFailed:
+		return nil, fmt.Errorf("runtime job %q could not be canceled: %s", id, result.Snapshot.Error)
 	default:
 		if result.Code == "" && result.Found && result.Transition && result.Snapshot.Status == runtimejobs.StatusCanceled {
 			return runtimeJobSnapshotToGraphQL(result.Snapshot), nil
