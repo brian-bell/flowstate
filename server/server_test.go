@@ -383,6 +383,111 @@ func TestHandlerValidatesIPv6TailscaleHost(t *testing.T) {
 	}
 }
 
+func TestHandlerValidatesTailscaleHostAlsoAllowsLoopbackEndpoint(t *testing.T) {
+	handler, err := server.NewHandler(server.HandlerOptions{
+		Token: "test-token",
+		AllowedEndpoints: []server.AllowedEndpoint{
+			{Host: "127.0.0.1", Port: "5555", Aliases: []string{"localhost", "127.0.0.1"}},
+			{Host: "100.88.77.66", Port: "8080"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewHandler returned error: %v", err)
+	}
+
+	for _, host := range []string{
+		"127.0.0.1:5555",
+		"localhost:5555",
+		"100.88.77.66:8080",
+	} {
+		t.Run("accepts "+host, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:5555/healthz", nil)
+			req.Host = host
+			res := httptest.NewRecorder()
+			handler.ServeHTTP(res, req)
+			if res.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body %q", res.Code, res.Body.String())
+			}
+		})
+	}
+
+	for _, host := range []string{
+		"100.88.77.66:5555", // tailnet host on loopback port
+		"127.0.0.1:8080",    // loopback host on tailnet port
+		"localhost:8080",    // loopback alias on tailnet port
+		"100.88.77.66:9999", // mismatched tailnet port
+		"127.0.0.1:9999",    // mismatched loopback port
+		"100.88.77.67:8080", // unrelated tailnet host
+		"192.0.2.10:8080",   // unrelated host
+	} {
+		t.Run("rejects "+host, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:5555/healthz", nil)
+			req.Host = host
+			res := httptest.NewRecorder()
+			handler.ServeHTTP(res, req)
+			if res.Code != http.StatusForbidden {
+				t.Fatalf("status = %d, want 403; body %q", res.Code, res.Body.String())
+			}
+		})
+	}
+}
+
+func TestHandlerValidatesEndpointOrigins(t *testing.T) {
+	handler, err := server.NewHandler(server.HandlerOptions{
+		Token: "test-token",
+		AllowedEndpoints: []server.AllowedEndpoint{
+			{Host: "127.0.0.1", Port: "5555", Aliases: []string{"localhost", "127.0.0.1"}},
+			{Host: "100.88.77.66", Port: "8080"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewHandler returned error: %v", err)
+	}
+
+	for _, origin := range []string{
+		"",
+		"http://127.0.0.1:5555",
+		"http://localhost:5555",
+		"http://100.88.77.66:8080",
+	} {
+		t.Run("accepts "+origin, func(t *testing.T) {
+			req := newGraphQLRequest()
+			req.Host = "127.0.0.1:5555"
+			req.Header.Set("Authorization", "Bearer test-token")
+			if origin != "" {
+				req.Header.Set("Origin", origin)
+			}
+			res := httptest.NewRecorder()
+			handler.ServeHTTP(res, req)
+			if res.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body %q", res.Code, res.Body.String())
+			}
+		})
+	}
+
+	for _, origin := range []string{
+		"http://100.88.77.66:5555",            // tailnet host on loopback port
+		"http://127.0.0.1:8080",               // loopback host on tailnet port
+		"http://localhost:8080",               // loopback alias on tailnet port
+		"http://100.88.77.66:9999",            // mismatched tailnet port
+		"http://127.0.0.1:9999",               // mismatched loopback port
+		"http://evil@127.0.0.1:5555",          // userinfo smuggled into an allowed host
+		"http://127.0.0.1:5555@evil.com:5555", // host is actually evil.com
+	} {
+		t.Run("rejects "+origin, func(t *testing.T) {
+			req := newGraphQLRequest()
+			req.Host = "127.0.0.1:5555"
+			req.Header.Set("Authorization", "Bearer test-token")
+			req.Header.Set("Origin", origin)
+			res := httptest.NewRecorder()
+			handler.ServeHTTP(res, req)
+			if res.Code != http.StatusForbidden {
+				t.Fatalf("status = %d, want 403; body %q", res.Code, res.Body.String())
+			}
+		})
+	}
+}
+
 func TestHandlerValidatesOrigin(t *testing.T) {
 	handler, err := server.NewHandler(server.HandlerOptions{
 		Token:          "test-token",
