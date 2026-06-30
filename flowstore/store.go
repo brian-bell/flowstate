@@ -842,8 +842,10 @@ func PhaseRuntimeRecoveryLaunchable(phase FlowPhase) bool {
 	case OutcomeChangesRequested:
 		notes := strings.TrimSpace(phase.Notes)
 		return artifacts.NormalizePhaseID(phase.PhaseID) == "plan-review" &&
-			strings.HasPrefix(notes, "Runtime job ") &&
-			strings.Contains(notes, " canceled by user request.")
+			(strings.HasPrefix(notes, "Runtime job failed: ") ||
+				strings.HasPrefix(notes, "Runtime job failed to start: ") ||
+				(strings.HasPrefix(notes, "Runtime job ") &&
+					strings.Contains(notes, " canceled by user request.")))
 	default:
 		return false
 	}

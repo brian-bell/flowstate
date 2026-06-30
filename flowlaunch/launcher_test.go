@@ -109,6 +109,16 @@ func TestPhaseCanLaunchUsesCanonicalFlowRules(t *testing.T) {
 	if !flowlaunch.PhaseCanLaunch(recovery, recovery.Phases[2]) {
 		t.Fatal("runtime-canceled needs_attention phase should be launchable")
 	}
+
+	planReviewRecovery := flowstore.FlowRecord{
+		Phases: []flowstore.FlowPhase{
+			{PhaseID: "plan", Status: flowstore.PhaseCompleted, Order: 1},
+			{PhaseID: "plan-review", Status: flowstore.PhaseNeedsAttention, Outcome: flowstore.OutcomeChangesRequested, Notes: "Runtime job failed to start: runtime unavailable", Order: 2},
+		},
+	}
+	if !flowlaunch.PhaseCanLaunch(planReviewRecovery, planReviewRecovery.Phases[1]) {
+		t.Fatal("plan-review runtime failure should be launchable")
+	}
 }
 
 func TestPhaseByIDPrefersExactIDBeforeNormalizedFallback(t *testing.T) {
