@@ -265,7 +265,7 @@ func (r *Registry) cancelJob(id, reason string, updatePhase bool) CancelResult {
 			snapshot = r.restoreFailedCancel(snapshot.ID, previous, fmt.Sprintf("terminate runtime process group: %v", err))
 			terminationConfirmed = false
 		}
-		if cancel != nil {
+		if terminationConfirmed && cancel != nil {
 			cancel()
 		}
 	} else if cancel != nil {
