@@ -134,6 +134,25 @@ func (r *mutationResolver) StartFlow(ctx context.Context, input model.StartFlowI
 	if r.FlowCreator == nil {
 		return nil, fmt.Errorf("flow creator is not configured")
 	}
+	var command string
+	var reasoningEffort string
+	if input.LaunchPlan {
+		if r.FlowStore == nil {
+			return nil, fmt.Errorf("flow store is not configured")
+		}
+		if r.RuntimeStarter == nil {
+			return nil, fmt.Errorf("runtime job starter is not configured")
+		}
+		var err error
+		command, err = r.launchAgentCommand(input.AgentCommand)
+		if err != nil {
+			return nil, err
+		}
+		reasoningEffort, err = r.launchReasoningEffort(command, input.ReasoningEffort)
+		if err != nil {
+			return nil, err
+		}
+	}
 	baseRef := ""
 	if input.BaseRef != nil {
 		baseRef = *input.BaseRef
@@ -150,20 +169,6 @@ func (r *mutationResolver) StartFlow(ctx context.Context, input model.StartFlowI
 	if !input.LaunchPlan {
 		view := r.flowView(record)
 		return &model.StartFlowPayload{Flow: flowToGraphQL(view)}, nil
-	}
-	if r.FlowStore == nil {
-		return nil, fmt.Errorf("flow store is not configured")
-	}
-	if r.RuntimeStarter == nil {
-		return nil, fmt.Errorf("runtime job starter is not configured")
-	}
-	command, err := r.launchAgentCommand(input.AgentCommand)
-	if err != nil {
-		return nil, err
-	}
-	reasoningEffort, err := r.launchReasoningEffort(command, input.ReasoningEffort)
-	if err != nil {
-		return nil, err
 	}
 	phase, ok := flowlaunch.PhaseByID(record, "plan")
 	if !ok {

@@ -52,6 +52,22 @@ type Client struct {
 	newID       func() (string, error)
 }
 
+type FlowClient interface {
+	ListFlows(context.Context, flowstore.FlowFilter) ([]flowstore.FlowRecord, error)
+	ReadFlow(context.Context, string) (flowstore.FlowRecord, error)
+	SetPhase(context.Context, flowstore.PhaseUpdate) (flowstore.FlowRecord, flowstore.FlowPhase, error)
+	RestartFlowPhase(context.Context, flowstore.PhaseRestartUpdate) (flowstore.FlowRecord, flowstore.FlowPhase, error)
+	AddFlowChildPhase(context.Context, flowstore.ChildPhaseUpdate) (flowstore.FlowRecord, flowstore.FlowPhase, error)
+	SetFlowPlanLink(context.Context, flowstore.PlanLinkUpdate) (flowstore.FlowRecord, error)
+	SetFlowPR(context.Context, flowstore.PRUpdate) (flowstore.FlowRecord, flowstore.PullRequest, error)
+	SetFlowMerge(context.Context, flowstore.MergeUpdate) (flowstore.FlowRecord, flowstore.Merge, error)
+	SetFlowAutoMode(context.Context, flowstore.AutoModeUpdate) (flowstore.FlowRecord, error)
+	DeleteFlow(context.Context, string) (string, error)
+	StartFlow(context.Context, StartFlowInput) (StartFlowResult, error)
+}
+
+var _ FlowClient = (*Client)(nil)
+
 type StartFlowInput struct {
 	RepoPath        string
 	Title           string
@@ -188,6 +204,37 @@ func (c *Client) ReadFlow(ctx context.Context, flowID string) (flowstore.FlowRec
 		return flowstore.FlowRecord{}, fmt.Errorf("flow %q not found: %w", flowID, flowstore.ErrFlowNotFound)
 	}
 	return data.Flow.record(), nil
+}
+
+func (c *Client) SetPhase(ctx context.Context, update flowstore.PhaseUpdate) (flowstore.FlowRecord, flowstore.FlowPhase, error) {
+	status, err := phaseStatusInput(update.Status)
+	if err != nil {
+		return flowstore.FlowRecord{}, flowstore.FlowPhase{}, err
+	}
+	input := map[string]any{
+		"flowId":  update.FlowID,
+		"phaseId": update.PhaseID,
+		"status":  status,
+	}
+	if update.Outcome != "" {
+		input["outcome"] = update.Outcome
+	}
+	if update.Notes != "" {
+		input["notes"] = update.Notes
+	}
+	if update.Summary != "" {
+		input["summary"] = update.Summary
+	}
+	var data struct {
+		SetFlowPhaseStatus struct {
+			Flow  flowDTO      `json:"flow"`
+			Phase flowPhaseDTO `json:"phase"`
+		} `json:"setFlowPhaseStatus"`
+	}
+	if err := c.mutation(ctx, setFlowPhaseStatusMutation, map[string]any{"input": input}, &data); err != nil {
+		return flowstore.FlowRecord{}, flowstore.FlowPhase{}, err
+	}
+	return data.SetFlowPhaseStatus.Flow.record(), data.SetFlowPhaseStatus.Phase.phase(), nil
 }
 
 func (c *Client) RestartFlowPhase(ctx context.Context, update flowstore.PhaseRestartUpdate) (flowstore.FlowRecord, flowstore.FlowPhase, error) {
@@ -416,7 +463,11 @@ func (c *Client) execute(ctx context.Context, payload graphQLRequest, idempotenc
 			return fmt.Errorf("decode GraphQL response: %w", err)
 		}
 		if len(envelope.Errors) > 0 {
-			return graphQLErrors(envelope.Errors)
+			err := graphQLErrors(envelope.Errors)
+			if graphQLErrorsContain(envelope.Errors, "flow not found") {
+				return fmt.Errorf("%w: %v", flowstore.ErrFlowNotFound, err)
+			}
+			return err
 		}
 		if out == nil {
 			return nil
@@ -474,6 +525,32 @@ func graphQLErrors(errors []graphQLError) error {
 		messages = append(messages, gqlErr.Message)
 	}
 	return fmt.Errorf("daemon GraphQL error: %s", strings.Join(messages, "; "))
+}
+
+func graphQLErrorsContain(errors []graphQLError, fragment string) bool {
+	for _, gqlErr := range errors {
+		if strings.Contains(gqlErr.Message, fragment) {
+			return true
+		}
+	}
+	return false
+}
+
+func phaseStatusInput(status string) (string, error) {
+	switch status {
+	case flowstore.PhaseRunning:
+		return "RUNNING", nil
+	case flowstore.PhaseNeedsAttention:
+		return "NEEDS_ATTENTION", nil
+	case flowstore.PhaseCompleted:
+		return "COMPLETED", nil
+	case flowstore.PhaseBlocked:
+		return "BLOCKED", nil
+	case flowstore.PhaseSkipped:
+		return "SKIPPED", nil
+	default:
+		return "", fmt.Errorf("unsupported flow phase status %q", status)
+	}
 }
 
 type flowDTO struct {
@@ -662,6 +739,17 @@ const listFlowsQuery = `query($filter: FlowFilterInput) {
 const readFlowQuery = `query($id: ID!) {
 	flow(id: $id) {
 		` + flowFields + `
+	}
+}`
+
+const setFlowPhaseStatusMutation = `mutation($input: SetFlowPhaseStatusInput!) {
+	setFlowPhaseStatus(input: $input) {
+		flow { ` + flowFields + ` }
+		phase {
+			phaseId parentPhaseId title kind statusRaw order outcome notes summary launchIds
+			sessions { provider sessionId launchId status startedAt endedAt transcriptPath }
+			createdAt updatedAt
+		}
 	}
 }`
 

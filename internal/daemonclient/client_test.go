@@ -15,6 +15,7 @@ import (
 
 	"github.com/brian-bell/flowstate/flowstore"
 	"github.com/brian-bell/flowstate/internal/daemoncoords"
+	"github.com/brian-bell/flowstate/planstore"
 	"github.com/brian-bell/flowstate/server"
 )
 
@@ -106,7 +107,7 @@ func TestClientReadFlowAndNotFound(t *testing.T) {
 }
 
 func TestClientMutationMethodsRoundTripThroughGraphQL(t *testing.T) {
-	store, url := newClientGraphQLServer(t, "test-token")
+	store, url, root := newClientGraphQLServerWithRoot(t, "test-token")
 	record := createClientFlow(t, store, flowstore.FlowRecord{
 		FlowID:       "mutation-flow",
 		Title:        "Mutation Flow",
@@ -138,6 +139,18 @@ func TestClientMutationMethodsRoundTripThroughGraphQL(t *testing.T) {
 	if restarted.PhaseID != "plan" || restarted.Status != flowstore.PhaseRunning {
 		t.Fatalf("restarted phase = %#v", restarted)
 	}
+	_, completed, err := client.SetPhase(context.Background(), flowstore.PhaseUpdate{
+		FlowID:  record.FlowID,
+		PhaseID: "plan",
+		Status:  flowstore.PhaseCompleted,
+		Summary: "done",
+	})
+	if err != nil {
+		t.Fatalf("SetPhase: %v", err)
+	}
+	if completed.PhaseID != "plan" || completed.Status != flowstore.PhaseCompleted || completed.Summary != "done" {
+		t.Fatalf("completed phase = %#v", completed)
+	}
 	_, child, err := client.AddFlowChildPhase(context.Background(), flowstore.ChildPhaseUpdate{
 		FlowID:        record.FlowID,
 		ParentPhaseID: "implementation",
@@ -150,6 +163,58 @@ func TestClientMutationMethodsRoundTripThroughGraphQL(t *testing.T) {
 	}
 	if child.PhaseID != "implementation-client" || child.ParentPhaseID != "implementation" {
 		t.Fatalf("child phase = %#v", child)
+	}
+	planID, planPath := saveClientPlan(t, root)
+	linked, err := client.SetFlowPlanLink(context.Background(), flowstore.PlanLinkUpdate{
+		FlowID:   record.FlowID,
+		PlanID:   planID,
+		PlanPath: planPath,
+	})
+	if err != nil {
+		t.Fatalf("SetFlowPlanLink: %v", err)
+	}
+	if linked.PlanID != planID || linked.PlanPath != planPath {
+		t.Fatalf("linked flow = %#v", linked)
+	}
+	_, pr, err := client.SetFlowPR(context.Background(), flowstore.PRUpdate{
+		FlowID:     record.FlowID,
+		Provider:   "github",
+		Number:     17,
+		URL:        "https://github.com/brian-bell/flowstate/pull/17",
+		HeadBranch: "flow/client",
+		BaseBranch: "main",
+		Status:     "open",
+	})
+	if err != nil {
+		t.Fatalf("SetFlowPR: %v", err)
+	}
+	if pr.Number != 17 || pr.HeadBranch != "flow/client" || pr.Status != "open" {
+		t.Fatalf("PR = %#v", pr)
+	}
+	mergeRecord := createClientFlow(t, store, flowstore.FlowRecord{
+		FlowID:       "merge-mutation-flow",
+		Title:        "Merge Mutation Flow",
+		Instructions: "merge mutation instructions",
+		RepoPath:     t.TempDir(),
+		Phases: []flowstore.FlowPhase{{
+			PhaseID:   "merge",
+			Title:     "Merge",
+			Status:    flowstore.PhaseBlocked,
+			Notes:     "waiting on CI",
+			Order:     7,
+			CreatedAt: time.Now().UTC(),
+			UpdatedAt: time.Now().UTC(),
+		}},
+	})
+	_, merge, err := client.SetFlowMerge(context.Background(), flowstore.MergeUpdate{
+		FlowID: mergeRecord.FlowID,
+		Status: flowstore.MergeBlocked,
+	})
+	if err != nil {
+		t.Fatalf("SetFlowMerge: %v", err)
+	}
+	if merge.Status != flowstore.MergeBlocked {
+		t.Fatalf("merge = %#v", merge)
 	}
 	auto, err := client.SetFlowAutoMode(context.Background(), flowstore.AutoModeUpdate{FlowID: record.FlowID, Enabled: false})
 	if err != nil {
@@ -176,6 +241,115 @@ func TestClientMutationMethodsRoundTripThroughGraphQL(t *testing.T) {
 	}
 	if started.Flow.FlowID == "" || started.Flow.Title != "Started Flow" || started.LaunchError != "" {
 		t.Fatalf("StartFlow result = %#v", started)
+	}
+}
+
+func TestClientMutationNotFoundErrorsClassifyAsFlowstoreNotFound(t *testing.T) {
+	_, url, root := newClientGraphQLServerWithRoot(t, "test-token")
+	client, err := New(Options{EndpointURL: url, Token: "test-token"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	planID, planPath := saveClientPlan(t, root)
+
+	for _, tt := range []struct {
+		name string
+		run  func(context.Context) error
+	}{
+		{
+			name: "SetPhase",
+			run: func(ctx context.Context) error {
+				_, _, err := client.SetPhase(ctx, flowstore.PhaseUpdate{
+					FlowID:  "missing-flow",
+					PhaseID: "plan",
+					Status:  flowstore.PhaseCompleted,
+				})
+				return err
+			},
+		},
+		{
+			name: "RestartFlowPhase",
+			run: func(ctx context.Context) error {
+				_, _, err := client.RestartFlowPhase(ctx, flowstore.PhaseRestartUpdate{
+					FlowID:  "missing-flow",
+					PhaseID: "plan",
+					Notes:   "rerun",
+				})
+				return err
+			},
+		},
+		{
+			name: "AddFlowChildPhase",
+			run: func(ctx context.Context) error {
+				_, _, err := client.AddFlowChildPhase(ctx, flowstore.ChildPhaseUpdate{
+					FlowID:        "missing-flow",
+					ParentPhaseID: "implementation",
+					PhaseID:       "child",
+					Title:         "Child",
+					Order:         10,
+				})
+				return err
+			},
+		},
+		{
+			name: "SetFlowPlanLink",
+			run: func(ctx context.Context) error {
+				_, err := client.SetFlowPlanLink(ctx, flowstore.PlanLinkUpdate{
+					FlowID:   "missing-flow",
+					PlanID:   planID,
+					PlanPath: planPath,
+				})
+				return err
+			},
+		},
+		{
+			name: "SetFlowPR",
+			run: func(ctx context.Context) error {
+				_, _, err := client.SetFlowPR(ctx, flowstore.PRUpdate{
+					FlowID:     "missing-flow",
+					Provider:   "github",
+					Number:     17,
+					URL:        "https://github.com/brian-bell/flowstate/pull/17",
+					HeadBranch: "flow/client",
+					BaseBranch: "main",
+					Status:     "open",
+				})
+				return err
+			},
+		},
+		{
+			name: "SetFlowMerge",
+			run: func(ctx context.Context) error {
+				_, _, err := client.SetFlowMerge(ctx, flowstore.MergeUpdate{
+					FlowID: "missing-flow",
+					Status: flowstore.MergeBlocked,
+				})
+				return err
+			},
+		},
+		{
+			name: "SetFlowAutoMode",
+			run: func(ctx context.Context) error {
+				_, err := client.SetFlowAutoMode(ctx, flowstore.AutoModeUpdate{
+					FlowID:  "missing-flow",
+					Enabled: true,
+				})
+				return err
+			},
+		},
+		{
+			name: "DeleteFlow",
+			run: func(ctx context.Context) error {
+				_, err := client.DeleteFlow(ctx, "missing-flow")
+				return err
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.run(context.Background()); !flowstore.IsNotFound(err) {
+				t.Fatalf("%s missing error = %v, want flowstore not found", tt.name, err)
+			}
+		})
 	}
 }
 
@@ -246,6 +420,12 @@ func TestClientUnauthorizedAndTransportErrors(t *testing.T) {
 
 func newClientGraphQLServer(t *testing.T, token string) (*flowstore.Store, string) {
 	t.Helper()
+	store, url, _ := newClientGraphQLServerWithRoot(t, token)
+	return store, url
+}
+
+func newClientGraphQLServerWithRoot(t *testing.T, token string) (*flowstore.Store, string, string) {
+	t.Helper()
 	root := t.TempDir()
 	store, err := flowstore.NewStore(flowstore.StoreOptions{Root: root})
 	if err != nil {
@@ -272,7 +452,7 @@ func newClientGraphQLServer(t *testing.T, token string) (*flowstore.Store, strin
 	srv.Listener = ln
 	srv.Start()
 	t.Cleanup(srv.Close)
-	return store, srv.URL
+	return store, srv.URL, root
 }
 
 func createClientFlow(t *testing.T, store *flowstore.Store, record flowstore.FlowRecord) flowstore.FlowRecord {
@@ -282,6 +462,28 @@ func createClientFlow(t *testing.T, store *flowstore.Store, record flowstore.Flo
 		t.Fatalf("Create(%s): %v", record.FlowID, err)
 	}
 	return created
+}
+
+func saveClientPlan(t *testing.T, root string) (string, string) {
+	t.Helper()
+	store, err := planstore.NewStore(planstore.StoreOptions{Root: root})
+	if err != nil {
+		t.Fatalf("New plan store: %v", err)
+	}
+	planID, err := store.Save(planstore.PlanRecord{
+		PlanID:   "plan-1",
+		Title:    "Plan 1",
+		Status:   "approved",
+		Markdown: "# Plan 1\n",
+	})
+	if err != nil {
+		t.Fatalf("Save plan: %v", err)
+	}
+	planPath, err := planstore.MarkdownPath(root, planID)
+	if err != nil {
+		t.Fatalf("MarkdownPath: %v", err)
+	}
+	return planID, planPath
 }
 
 func TestMain(m *testing.M) {

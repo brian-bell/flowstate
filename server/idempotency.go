@@ -153,18 +153,9 @@ func isCacheableGraphQLResponse(response cachedHTTPResponse) bool {
 	if response.status < 200 || response.status >= 300 {
 		return false
 	}
-	var envelope struct {
-		Data   json.RawMessage   `json:"data"`
-		Errors []json.RawMessage `json:"errors"`
-	}
-	if err := json.Unmarshal(response.body, &envelope); err != nil {
-		return false
-	}
-	if len(envelope.Errors) > 0 {
-		return false
-	}
-	data := strings.TrimSpace(string(envelope.Data))
-	return data != "" && data != "null"
+	var envelope map[string]json.RawMessage
+	return json.Unmarshal(response.body, &envelope) == nil &&
+		(envelope["data"] != nil || envelope["errors"] != nil)
 }
 
 func writeCachedHTTPResponse(w http.ResponseWriter, response cachedHTTPResponse) {

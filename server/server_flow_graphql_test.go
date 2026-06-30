@@ -959,6 +959,103 @@ func TestHandlerGraphQLCreateFlowAndLaunchPlanRejectsInvalidAgentBeforeCreate(t 
 	}
 }
 
+func TestHandlerGraphQLStartFlowLaunchPlanValidatesBeforeCreate(t *testing.T) {
+	tests := []struct {
+		name         string
+		defaultAgent string
+		input        map[string]any
+		options      func(*capturingRuntimeProvider) server.HandlerOptions
+		wantError    string
+	}{
+		{
+			name: "missing store",
+			options: func(runtime *capturingRuntimeProvider) server.HandlerOptions {
+				return server.HandlerOptions{
+					RuntimeJobs:    runtime,
+					RuntimeStarter: runtime,
+					AgentCommand:   "codex",
+				}
+			},
+			wantError: "flow store is not configured",
+		},
+		{
+			name: "missing runtime starter",
+			options: func(runtime *capturingRuntimeProvider) server.HandlerOptions {
+				store, _ := newFlowGraphQLStore(t)
+				return server.HandlerOptions{
+					FlowStore:    store,
+					RuntimeJobs:  runtime,
+					AgentCommand: "codex",
+				}
+			},
+			wantError: "runtime job starter is not configured",
+		},
+		{
+			name:         "invalid command",
+			defaultAgent: "codex",
+			input:        map[string]any{"agentCommand": "vim"},
+			wantError:    `unsupported agent "vim"`,
+		},
+		{
+			name:      "missing command",
+			input:     map[string]any{},
+			wantError: "agent command is required",
+		},
+		{
+			name:         "invalid reasoning effort",
+			defaultAgent: "codex",
+			input:        map[string]any{"reasoningEffort": "turbo"},
+			wantError:    `unsupported reasoning effort "turbo" for codex`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			creator := &staticFlowCreator{record: flowstore.FlowRecord{FlowID: "should-not-create"}}
+			runtime := &capturingRuntimeProvider{}
+			opts := server.HandlerOptions{}
+			if tt.options != nil {
+				opts = tt.options(runtime)
+			} else {
+				store, _ := newFlowGraphQLStore(t)
+				opts = server.HandlerOptions{
+					FlowStore:      store,
+					RuntimeJobs:    runtime,
+					RuntimeStarter: runtime,
+					AgentCommand:   tt.defaultAgent,
+				}
+			}
+			opts.FlowCreator = creator
+			handler := newFlowGraphQLHandlerWithOptions(t, opts)
+
+			input := map[string]any{
+				"repoPath":     t.TempDir(),
+				"title":        "Invalid Start",
+				"instructions": "do not create",
+				"launchPlan":   true,
+			}
+			for key, value := range tt.input {
+				input[key] = value
+			}
+			var out struct {
+				Data   any   `json:"data"`
+				Errors []any `json:"errors"`
+			}
+			postGraphQL(t, handler, `mutation($input: StartFlowInput!) {
+				startFlow(input: $input) { launchId }
+			}`, map[string]any{"input": input}, &out)
+			if !graphQLErrorsContain(out.Errors, tt.wantError) {
+				t.Fatalf("GraphQL errors = %#v, want %q", out.Errors, tt.wantError)
+			}
+			if creator.called {
+				t.Fatal("flow creator was called for invalid launch settings")
+			}
+			if len(runtime.requests) != 0 {
+				t.Fatalf("runtime requests = %#v, want none", runtime.requests)
+			}
+		})
+	}
+}
+
 func TestHandlerGraphQLCreateFlowAndLaunchPlanReturnsBlockedFlowWithoutRuntimeJob(t *testing.T) {
 	store, _ := newFlowGraphQLStore(t)
 	runtime := &capturingRuntimeProvider{}
@@ -1258,6 +1355,36 @@ func TestHandlerGraphQLIdempotencyReplaysMutationResponse(t *testing.T) {
 
 	if first != second {
 		t.Fatalf("replayed body differs\nfirst:  %s\nsecond: %s", first, second)
+	}
+	if got := spy.SetPhaseCalls(); got != 1 {
+		t.Fatalf("SetPhase calls = %d, want 1", got)
+	}
+}
+
+func TestHandlerGraphQLIdempotencyReplaysMutationErrors(t *testing.T) {
+	store, _ := newFlowGraphQLStore(t)
+	record := createGraphQLFlow(t, store, flowstore.FlowRecord{
+		FlowID:       "idempotent-error-flow",
+		Title:        "Idempotent Error Flow",
+		Instructions: "idempotent error instructions",
+		RepoPath:     t.TempDir(),
+	})
+	spy := &setPhaseCountingStore{Store: store}
+	handler := newFlowGraphQLHandler(t, spy)
+	variables := map[string]any{"input": map[string]any{
+		"flowId":  record.FlowID,
+		"phaseId": "missing-phase",
+		"status":  "COMPLETED",
+	}}
+
+	first := postGraphQLRaw(t, handler, setFlowPhaseStatusMutation, variables, map[string]string{"Idempotency-Key": "same-key"}, http.StatusOK)
+	second := postGraphQLRaw(t, handler, setFlowPhaseStatusMutation, variables, map[string]string{"Idempotency-Key": "same-key"}, http.StatusOK)
+
+	if first != second {
+		t.Fatalf("replayed error body differs\nfirst:  %s\nsecond: %s", first, second)
+	}
+	if !strings.Contains(first, "missing-phase") {
+		t.Fatalf("error body = %s, want missing phase error", first)
 	}
 	if got := spy.SetPhaseCalls(); got != 1 {
 		t.Fatalf("SetPhase calls = %d, want 1", got)
