@@ -99,3 +99,20 @@ func TestPhaseCanLaunchUsesCanonicalFlowRules(t *testing.T) {
 		t.Fatal("ready merge phase should be launchable")
 	}
 }
+
+func TestPhaseByIDPrefersExactIDBeforeNormalizedFallback(t *testing.T) {
+	record := flowstore.FlowRecord{
+		Phases: []flowstore.FlowPhase{
+			{PhaseID: " Implementation ", Title: "Legacy duplicate", Status: flowstore.PhaseCompleted},
+			{PhaseID: "implementation", Title: "Exact requested phase", Status: flowstore.PhaseReady},
+		},
+	}
+
+	phase, ok := flowlaunch.PhaseByID(record, "implementation")
+	if !ok {
+		t.Fatal("PhaseByID() ok = false, want exact phase")
+	}
+	if phase.Title != "Exact requested phase" {
+		t.Fatalf("PhaseByID() = %#v, want exact phase before normalized duplicate", phase)
+	}
+}

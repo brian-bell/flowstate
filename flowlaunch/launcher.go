@@ -194,6 +194,11 @@ func PhaseByID(record flowstore.FlowRecord, phaseID string) (flowstore.FlowPhase
 		return flowstore.FlowPhase{}, false
 	}
 	for _, phase := range record.Phases {
+		if phase.PhaseID == phaseID {
+			return phase, true
+		}
+	}
+	for _, phase := range record.Phases {
 		if artifacts.NormalizePhaseID(phase.PhaseID) == normalized {
 			return phase, true
 		}
