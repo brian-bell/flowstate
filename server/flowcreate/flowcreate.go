@@ -7,12 +7,13 @@ import (
 
 	"github.com/brian-bell/flowstate/actions"
 	"github.com/brian-bell/flowstate/flowstore"
-	"github.com/brian-bell/flowstate/model"
+	"github.com/brian-bell/flowstate/internal/flowstart"
 	"github.com/brian-bell/flowstate/server/graph"
 )
 
 type Store interface {
 	Create(flowstore.FlowRecord) (flowstore.FlowRecord, error)
+	Read(string) (flowstore.FlowRecord, error)
 	SetStartMetadata(flowstore.StartMetadataUpdate) (flowstore.FlowRecord, error)
 	SetPhase(flowstore.PhaseUpdate) (flowstore.FlowRecord, error)
 }
@@ -48,7 +49,7 @@ func (c Creator) CreateFlow(ctx context.Context, input graph.CreateFlowInput) (f
 	if c.store == nil {
 		return flowstore.FlowRecord{}, fmt.Errorf("flow creator missing Store")
 	}
-	starter := model.NewFlowStarter(model.FlowStarterOptions{
+	starter := flowstart.NewStarter(flowstart.Options{
 		CreateFlow:           c.store.Create,
 		CreateWorktree:       c.createWorktree,
 		SetStartMetadata:     c.store.SetStartMetadata,
@@ -57,26 +58,17 @@ func (c Creator) CreateFlow(ctx context.Context, input graph.CreateFlowInput) (f
 		RunBootstrapHook:     c.runBootstrapHook,
 		ResolveCommit:        c.resolveCommit,
 	})
-	result, err := starter.PrepareFlow(model.FlowStartRequest{
+	result, err := starter.Prepare(flowstart.Request{
 		RepoPath:     strings.TrimSpace(input.RepoPath),
 		Title:        strings.TrimSpace(input.Title),
 		Instructions: strings.TrimSpace(input.Instructions),
 		BaseRef:      strings.TrimSpace(input.BaseRef),
 	})
 	if err != nil {
-		if flowBlocked(result.Flow) {
-			return result.Flow, nil
-		}
 		return flowstore.FlowRecord{}, err
 	}
-	return result.Flow, nil
-}
-
-func flowBlocked(record flowstore.FlowRecord) bool {
-	for _, phase := range record.Phases {
-		if phase.Status == flowstore.PhaseBlocked {
-			return true
-		}
+	if result.Blocked {
+		return result.Flow, nil
 	}
-	return false
+	return result.Flow, nil
 }
