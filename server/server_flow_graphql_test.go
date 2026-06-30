@@ -1636,6 +1636,42 @@ func TestHandlerGraphQLCancelRuntimeJobRejectsInvalidAndUnknownID(t *testing.T) 
 	}
 }
 
+func TestHandlerGraphQLCancelRuntimeJobAcceptsLegacySuccessfulControllerResult(t *testing.T) {
+	runtime := &legacyCancelRuntimeProvider{
+		result: runtimejobs.CancelResult{
+			Snapshot: runtimejobs.Snapshot{
+				ID:        "job-legacy",
+				Status:    runtimejobs.StatusCanceled,
+				CreatedAt: time.Date(2026, 6, 30, 3, 0, 0, 0, time.UTC),
+			},
+			Found:      true,
+			Transition: true,
+		},
+	}
+	handler := newFlowGraphQLHandlerWithOptions(t, server.HandlerOptions{
+		RuntimeJobs:       runtime,
+		RuntimeStarter:    runtime,
+		RuntimeController: runtime,
+	})
+
+	var out struct {
+		Data struct {
+			CancelRuntimeJob struct {
+				ID     string `json:"id"`
+				Status string `json:"status"`
+			} `json:"cancelRuntimeJob"`
+		} `json:"data"`
+		Errors []any `json:"errors"`
+	}
+	postGraphQL(t, handler, `mutation($id: ID!) {
+		cancelRuntimeJob(id: $id) { id status }
+	}`, map[string]any{"id": "job-legacy"}, &out)
+	if len(out.Errors) != 0 || out.Data.CancelRuntimeJob.ID != "job-legacy" ||
+		out.Data.CancelRuntimeJob.Status != string(runtimejobs.StatusCanceled) {
+		t.Fatalf("cancel response = %#v errors %#v, want legacy canceled success", out.Data.CancelRuntimeJob, out.Errors)
+	}
+}
+
 func TestHandlerGraphQLCancelRuntimeJobWithAttachedSessionDoesNotReportResetError(t *testing.T) {
 	store, _ := newFlowGraphQLStore(t)
 	record := createGraphQLFlow(t, store, flowstore.FlowRecord{
@@ -1961,6 +1997,26 @@ func (failingRuntimeJobLookup) RuntimeStateKnown() bool {
 
 func (failingRuntimeJobLookup) ActiveRuntimeJob(flowstore.FlowRecord, flowstore.FlowPhase) (*flowquery.RuntimeJob, error) {
 	return nil, errors.New("runtime lookup failed")
+}
+
+type legacyCancelRuntimeProvider struct {
+	result runtimejobs.CancelResult
+}
+
+func (p *legacyCancelRuntimeProvider) RuntimeStateKnown() bool {
+	return true
+}
+
+func (p *legacyCancelRuntimeProvider) ActiveRuntimeJob(flowstore.FlowRecord, flowstore.FlowPhase) (*flowquery.RuntimeJob, error) {
+	return nil, nil
+}
+
+func (p *legacyCancelRuntimeProvider) Start(context.Context, runtimejobs.StartRequest) (runtimejobs.Snapshot, error) {
+	return runtimejobs.Snapshot{}, nil
+}
+
+func (p *legacyCancelRuntimeProvider) Cancel(string) runtimejobs.CancelResult {
+	return p.result
 }
 
 type startErrorRuntimeProvider struct {
