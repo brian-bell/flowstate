@@ -1730,6 +1730,52 @@ func TestStoreAddPhaseLaunchIDRestartsNeedsAttentionPhase(t *testing.T) {
 	}
 }
 
+func TestStoreAddPhaseLaunchIDRejectRunningRestartsRuntimeCanceledPhase(t *testing.T) {
+	root := t.TempDir()
+	store, err := flowstore.NewStore(flowstore.StoreOptions{Root: root})
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+	record, err := store.Create(flowstore.FlowRecord{
+		Title:        "Runtime cancel relaunch",
+		Instructions: "restart implementation after cancel",
+		RepoPath:     filepath.Join(root, "repo"),
+		Branch:       "flow/runtime-cancel-relaunch",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	mustCompleteFlowPhases(t, store, &record, "plan", "plan-review")
+	record, err = store.SetPhase(flowstore.PhaseUpdate{
+		FlowID:  record.FlowID,
+		PhaseID: "implementation",
+		Status:  flowstore.PhaseNeedsAttention,
+		Outcome: "runtime_canceled",
+		Notes:   "Runtime job job-1 canceled by user request.",
+	})
+	if err != nil {
+		t.Fatalf("SetPhase(implementation runtime_canceled) error = %v", err)
+	}
+
+	relaunched, err := store.AddPhaseLaunchID(flowstore.PhaseLaunchUpdate{
+		FlowID:        record.FlowID,
+		PhaseID:       "implementation",
+		LaunchID:      "launch-retry",
+		RejectRunning: true,
+	})
+	if err != nil {
+		t.Fatalf("AddPhaseLaunchID(implementation retry) error = %v", err)
+	}
+
+	phase := phaseByID(t, relaunched, "implementation")
+	if phase.Status != flowstore.PhaseRunning || phase.Outcome != "" {
+		t.Fatalf("implementation after relaunch = %#v, want running with cleared outcome", phase)
+	}
+	if len(phase.LaunchIDs) != 1 || phase.LaunchIDs[0] != "launch-retry" {
+		t.Fatalf("launch ids = %#v", phase.LaunchIDs)
+	}
+}
+
 func TestStoreAddPhaseLaunchIDResumePreservesCompletedPhase(t *testing.T) {
 	root := t.TempDir()
 	store, err := flowstore.NewStore(flowstore.StoreOptions{Root: root})

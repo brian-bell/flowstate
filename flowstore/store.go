@@ -823,10 +823,30 @@ func phaseLaunchableForFreshStart(record FlowRecord, phase FlowPhase) bool {
 	if phase.Status == PhaseReady {
 		return true
 	}
+	if PhaseRuntimeRecoveryLaunchable(phase) && PhasePredecessorsSatisfied(record, phase.PhaseID) {
+		return true
+	}
 	return phaseID == "autoreview" &&
 		(phase.Status == PhaseNeedsAttention || phase.Status == PhaseBlocked) &&
 		HasPRTarget(record.PR) &&
 		PhasePredecessorsSatisfied(record, phase.PhaseID)
+}
+
+func PhaseRuntimeRecoveryLaunchable(phase FlowPhase) bool {
+	if phase.Status != PhaseNeedsAttention {
+		return false
+	}
+	switch phase.Outcome {
+	case "runtime_canceled", "runtime_start_failed", "runtime_failed":
+		return true
+	case OutcomeChangesRequested:
+		notes := strings.TrimSpace(phase.Notes)
+		return artifacts.NormalizePhaseID(phase.PhaseID) == "plan-review" &&
+			strings.HasPrefix(notes, "Runtime job ") &&
+			strings.Contains(notes, " canceled by user request.")
+	default:
+		return false
+	}
 }
 
 func validateAutoPhaseLaunch(record FlowRecord, phase FlowPhase) error {

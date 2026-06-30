@@ -98,6 +98,17 @@ func TestPhaseCanLaunchUsesCanonicalFlowRules(t *testing.T) {
 	if !flowlaunch.PhaseCanLaunch(record, record.Phases[6]) {
 		t.Fatal("ready merge phase should be launchable")
 	}
+
+	recovery := flowstore.FlowRecord{
+		Phases: []flowstore.FlowPhase{
+			{PhaseID: "plan", Status: flowstore.PhaseCompleted, Order: 1},
+			{PhaseID: "plan-review", Status: flowstore.PhaseCompleted, Outcome: flowstore.OutcomeApproved, Order: 2},
+			{PhaseID: "implementation", Status: flowstore.PhaseNeedsAttention, Outcome: "runtime_canceled", Order: 3},
+		},
+	}
+	if !flowlaunch.PhaseCanLaunch(recovery, recovery.Phases[2]) {
+		t.Fatal("runtime-canceled needs_attention phase should be launchable")
+	}
 }
 
 func TestPhaseByIDPrefersExactIDBeforeNormalizedFallback(t *testing.T) {

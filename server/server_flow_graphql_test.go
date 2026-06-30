@@ -1569,13 +1569,23 @@ func TestHandlerGraphQLCancelRuntimeJobStopsJobWithoutPhaseFailure(t *testing.T)
 		t.Fatalf("cancel changed phase to %#v, want runtime_canceled needs_attention", phase)
 	}
 
-	updated, err = store.AddPhaseLaunchID(flowstore.PhaseLaunchUpdate{
-		FlowID:   record.FlowID,
-		PhaseID:  "implementation",
-		LaunchID: "launch-retry",
-	})
-	if err != nil {
-		t.Fatalf("AddPhaseLaunchID(retry) error = %v", err)
+	var retryLaunch struct {
+		Data struct {
+			LaunchFlowPhase struct {
+				LaunchID string `json:"launchId"`
+				Job      struct {
+					ID string `json:"id"`
+				} `json:"job"`
+			} `json:"launchFlowPhase"`
+		} `json:"data"`
+		Errors []any `json:"errors"`
+	}
+	postGraphQL(t, handler, `mutation($input: LaunchFlowPhaseInput!) {
+		launchFlowPhase(input: $input) { launchId job { id } }
+	}`, map[string]any{"input": map[string]any{"flowId": record.FlowID, "phaseId": "implementation"}}, &retryLaunch)
+	if len(retryLaunch.Errors) != 0 || retryLaunch.Data.LaunchFlowPhase.Job.ID == "" ||
+		retryLaunch.Data.LaunchFlowPhase.LaunchID == "" {
+		t.Fatalf("retry launch response = %#v errors %#v", retryLaunch.Data.LaunchFlowPhase, retryLaunch.Errors)
 	}
 
 	var repeatedCancel struct {
@@ -1597,7 +1607,7 @@ func TestHandlerGraphQLCancelRuntimeJobStopsJobWithoutPhaseFailure(t *testing.T)
 		t.Fatalf("Read after repeated cancel: %v", err)
 	}
 	if phase := phaseByIDForTest(updated, "implementation"); phase.Status != flowstore.PhaseRunning ||
-		flowstore.LatestPhaseLaunchID(phase) != "launch-retry" {
+		flowstore.LatestPhaseLaunchID(phase) != retryLaunch.Data.LaunchFlowPhase.LaunchID {
 		t.Fatalf("repeated old-job cancel changed phase to %#v, want retry still running", phase)
 	}
 }
