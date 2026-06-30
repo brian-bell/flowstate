@@ -1179,6 +1179,14 @@ func validateChildPhaseUpdate(update ChildPhaseUpdate) error {
 	return nil
 }
 
+// RefreshPhaseReadiness recomputes derived phase readiness using the same rules
+// the filesystem store applies on reads and mutations. It is exported so the
+// in-memory fake and future repository implementations reuse one implementation
+// of the readiness rules rather than reimplementing them.
+func RefreshPhaseReadiness(record FlowRecord, now time.Time) FlowRecord {
+	return refreshPhaseReadiness(record, now)
+}
+
 func refreshPhaseReadiness(record FlowRecord, now time.Time) FlowRecord {
 	record.Phases = OrderedPhases(record.Phases)
 	predecessorsSatisfied := true
