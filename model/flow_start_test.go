@@ -231,6 +231,43 @@ func TestFlowStarterPrepareFlowCreatesLaunchableFlowWithoutLaunchID(t *testing.T
 	}
 }
 
+func TestFlowStarterPrepareFlowReturnsBlockedFlowOnWorktreeFailure(t *testing.T) {
+	starter := model.NewFlowStarter(model.FlowStarterOptions{
+		CreateFlow: func(record flowstore.FlowRecord) (flowstore.FlowRecord, error) {
+			record.FlowID = "flow-1"
+			record.Phases = []flowstore.FlowPhase{{PhaseID: "plan", Title: "Plan", Status: flowstore.PhaseReady}}
+			return record, nil
+		},
+		CreateWorktree: func(string, string, string) (actions.FlowWorktreeCreateResult, error) {
+			return actions.FlowWorktreeCreateResult{}, errors.New("branch exists")
+		},
+		SetPhase: func(update flowstore.PhaseUpdate) (flowstore.FlowRecord, error) {
+			return flowstore.FlowRecord{
+				FlowID: "flow-1",
+				Phases: []flowstore.FlowPhase{{
+					PhaseID: update.PhaseID,
+					Status:  update.Status,
+					Notes:   update.Notes,
+				}},
+			}, nil
+		},
+	})
+
+	result, err := starter.PrepareFlow(model.FlowStartRequest{
+		RepoPath:     "/dev/alpha",
+		Title:        "Blocked Flow",
+		Instructions: "Plan later",
+	})
+	if err == nil || !strings.Contains(err.Error(), "branch exists") {
+		t.Fatalf("PrepareFlow error = %v, want worktree failure", err)
+	}
+	if len(result.Flow.Phases) != 1 ||
+		result.Flow.Phases[0].Status != flowstore.PhaseBlocked ||
+		!strings.Contains(result.Flow.Phases[0].Notes, "Worktree creation failed: branch exists") {
+		t.Fatalf("result flow = %#v, want blocked flow returned", result.Flow)
+	}
+}
+
 func TestFlowStarterStartPlanUsesConfiguredPromptTemplate(t *testing.T) {
 	starter := model.NewFlowStarter(model.FlowStarterOptions{
 		CreateFlow: func(record flowstore.FlowRecord) (flowstore.FlowRecord, error) {

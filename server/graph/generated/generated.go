@@ -79,6 +79,13 @@ type ComplexityRoot struct {
 		UpdatedAt           func(childComplexity int) int
 	}
 
+	LaunchFlowPhasePayload struct {
+		FlowID   func(childComplexity int) int
+		Job      func(childComplexity int) int
+		LaunchID func(childComplexity int) int
+		PhaseID  func(childComplexity int) int
+	}
+
 	Merge struct {
 		Commit   func(childComplexity int) int
 		MergedAt func(childComplexity int) int
@@ -86,7 +93,9 @@ type ComplexityRoot struct {
 	}
 
 	Mutation struct {
+		CancelRuntimeJob   func(childComplexity int, id string) int
 		CreateFlow         func(childComplexity int, input model.CreateFlowInput) int
+		LaunchFlowPhase    func(childComplexity int, input model.LaunchFlowPhaseInput) int
 		SetFlowPhaseStatus func(childComplexity int, input model.SetFlowPhaseStatusInput) int
 	}
 
@@ -106,9 +115,19 @@ type ComplexityRoot struct {
 	}
 
 	RuntimeJob struct {
-		ID      func(childComplexity int) int
-		PhaseID func(childComplexity int) int
-		Status  func(childComplexity int) int
+		CreatedAt        func(childComplexity int) int
+		EndedAt          func(childComplexity int) int
+		Error            func(childComplexity int) int
+		ExitCode         func(childComplexity int) int
+		FlowID           func(childComplexity int) int
+		ID               func(childComplexity int) int
+		LaunchID         func(childComplexity int) int
+		LogTail          func(childComplexity int) int
+		LogTruncated     func(childComplexity int) int
+		PhaseID          func(childComplexity int) int
+		PhaseUpdateError func(childComplexity int) int
+		StartedAt        func(childComplexity int) int
+		Status           func(childComplexity int) int
 	}
 
 	SetFlowPhaseStatusPayload struct {
@@ -123,6 +142,8 @@ type ComplexityRoot struct {
 
 type MutationResolver interface {
 	CreateFlow(ctx context.Context, input model.CreateFlowInput) (*model.Flow, error)
+	LaunchFlowPhase(ctx context.Context, input model.LaunchFlowPhaseInput) (*model.LaunchFlowPhasePayload, error)
+	CancelRuntimeJob(ctx context.Context, id string) (*model.RuntimeJob, error)
 	SetFlowPhaseStatus(ctx context.Context, input model.SetFlowPhaseStatusInput) (*model.SetFlowPhaseStatusPayload, error)
 }
 type QueryResolver interface {
@@ -367,6 +388,31 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.FlowPhase.UpdatedAt(childComplexity), true
 
+	case "LaunchFlowPhasePayload.flowId":
+		if e.ComplexityRoot.LaunchFlowPhasePayload.FlowID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.LaunchFlowPhasePayload.FlowID(childComplexity), true
+	case "LaunchFlowPhasePayload.job":
+		if e.ComplexityRoot.LaunchFlowPhasePayload.Job == nil {
+			break
+		}
+
+		return e.ComplexityRoot.LaunchFlowPhasePayload.Job(childComplexity), true
+	case "LaunchFlowPhasePayload.launchId":
+		if e.ComplexityRoot.LaunchFlowPhasePayload.LaunchID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.LaunchFlowPhasePayload.LaunchID(childComplexity), true
+	case "LaunchFlowPhasePayload.phaseId":
+		if e.ComplexityRoot.LaunchFlowPhasePayload.PhaseID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.LaunchFlowPhasePayload.PhaseID(childComplexity), true
+
 	case "Merge.commit":
 		if e.ComplexityRoot.Merge.Commit == nil {
 			break
@@ -386,6 +432,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Merge.Status(childComplexity), true
 
+	case "Mutation.cancelRuntimeJob":
+		if e.ComplexityRoot.Mutation.CancelRuntimeJob == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_cancelRuntimeJob_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.CancelRuntimeJob(childComplexity, args["id"].(string)), true
 	case "Mutation.createFlow":
 		if e.ComplexityRoot.Mutation.CreateFlow == nil {
 			break
@@ -397,6 +454,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.CreateFlow(childComplexity, args["input"].(model.CreateFlowInput)), true
+	case "Mutation.launchFlowPhase":
+		if e.ComplexityRoot.Mutation.LaunchFlowPhase == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_launchFlowPhase_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.LaunchFlowPhase(childComplexity, args["input"].(model.LaunchFlowPhaseInput)), true
 	case "Mutation.setFlowPhaseStatus":
 		if e.ComplexityRoot.Mutation.SetFlowPhaseStatus == nil {
 			break
@@ -475,18 +543,78 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Query.Health(childComplexity), true
 
+	case "RuntimeJob.createdAt":
+		if e.ComplexityRoot.RuntimeJob.CreatedAt == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RuntimeJob.CreatedAt(childComplexity), true
+	case "RuntimeJob.endedAt":
+		if e.ComplexityRoot.RuntimeJob.EndedAt == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RuntimeJob.EndedAt(childComplexity), true
+	case "RuntimeJob.error":
+		if e.ComplexityRoot.RuntimeJob.Error == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RuntimeJob.Error(childComplexity), true
+	case "RuntimeJob.exitCode":
+		if e.ComplexityRoot.RuntimeJob.ExitCode == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RuntimeJob.ExitCode(childComplexity), true
+	case "RuntimeJob.flowId":
+		if e.ComplexityRoot.RuntimeJob.FlowID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RuntimeJob.FlowID(childComplexity), true
 	case "RuntimeJob.id":
 		if e.ComplexityRoot.RuntimeJob.ID == nil {
 			break
 		}
 
 		return e.ComplexityRoot.RuntimeJob.ID(childComplexity), true
+	case "RuntimeJob.launchId":
+		if e.ComplexityRoot.RuntimeJob.LaunchID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RuntimeJob.LaunchID(childComplexity), true
+	case "RuntimeJob.logTail":
+		if e.ComplexityRoot.RuntimeJob.LogTail == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RuntimeJob.LogTail(childComplexity), true
+	case "RuntimeJob.logTruncated":
+		if e.ComplexityRoot.RuntimeJob.LogTruncated == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RuntimeJob.LogTruncated(childComplexity), true
 	case "RuntimeJob.phaseId":
 		if e.ComplexityRoot.RuntimeJob.PhaseID == nil {
 			break
 		}
 
 		return e.ComplexityRoot.RuntimeJob.PhaseID(childComplexity), true
+	case "RuntimeJob.phaseUpdateError":
+		if e.ComplexityRoot.RuntimeJob.PhaseUpdateError == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RuntimeJob.PhaseUpdateError(childComplexity), true
+	case "RuntimeJob.startedAt":
+		if e.ComplexityRoot.RuntimeJob.StartedAt == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RuntimeJob.StartedAt(childComplexity), true
 	case "RuntimeJob.status":
 		if e.ComplexityRoot.RuntimeJob.Status == nil {
 			break
@@ -516,6 +644,7 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 	ec := newExecutionContext(opCtx, e, make(chan graphql.DeferredResult))
 	inputUnmarshalMap := graphql.BuildUnmarshalerMap(
 		ec.unmarshalInputCreateFlowInput,
+		ec.unmarshalInputLaunchFlowPhaseInput,
 		ec.unmarshalInputSetFlowPhaseStatusInput,
 	)
 	first := true
@@ -607,6 +736,8 @@ type Query {
 
 type Mutation {
   createFlow(input: CreateFlowInput!): Flow!
+  launchFlowPhase(input: LaunchFlowPhaseInput!): LaunchFlowPhasePayload!
+  cancelRuntimeJob(id: ID!): RuntimeJob!
   setFlowPhaseStatus(input: SetFlowPhaseStatusInput!): SetFlowPhaseStatusPayload!
 }
 
@@ -615,6 +746,20 @@ input CreateFlowInput {
   title: String!
   instructions: String!
   baseRef: String
+}
+
+input LaunchFlowPhaseInput {
+  flowId: ID!
+  phaseId: ID!
+  agentCommand: String
+  reasoningEffort: String
+}
+
+type LaunchFlowPhasePayload {
+  flowId: ID!
+  phaseId: ID!
+  launchId: ID!
+  job: RuntimeJob!
 }
 
 input SetFlowPhaseStatusInput {
@@ -724,8 +869,18 @@ type Merge {
 
 type RuntimeJob {
   id: ID!
+  launchId: ID!
+  flowId: ID!
   phaseId: ID!
   status: String!
+  createdAt: Time!
+  startedAt: Time
+  endedAt: Time
+  exitCode: Int
+  error: String!
+  phaseUpdateError: String!
+  logTail: String!
+  logTruncated: Boolean!
 }
 `, BuiltIn: false},
 }
@@ -819,6 +974,20 @@ func (ec *executionContext) childFields_FlowPhase(ctx context.Context, field gra
 	return nil, fmt.Errorf("no field named %q was found under type FlowPhase", field.Name)
 }
 
+func (ec *executionContext) childFields_LaunchFlowPhasePayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "flowId":
+		return ec.fieldContext_LaunchFlowPhasePayload_flowId(ctx, field)
+	case "phaseId":
+		return ec.fieldContext_LaunchFlowPhasePayload_phaseId(ctx, field)
+	case "launchId":
+		return ec.fieldContext_LaunchFlowPhasePayload_launchId(ctx, field)
+	case "job":
+		return ec.fieldContext_LaunchFlowPhasePayload_job(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type LaunchFlowPhasePayload", field.Name)
+}
+
 func (ec *executionContext) childFields_Merge(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "status":
@@ -853,10 +1022,30 @@ func (ec *executionContext) childFields_RuntimeJob(ctx context.Context, field gr
 	switch field.Name {
 	case "id":
 		return ec.fieldContext_RuntimeJob_id(ctx, field)
+	case "launchId":
+		return ec.fieldContext_RuntimeJob_launchId(ctx, field)
+	case "flowId":
+		return ec.fieldContext_RuntimeJob_flowId(ctx, field)
 	case "phaseId":
 		return ec.fieldContext_RuntimeJob_phaseId(ctx, field)
 	case "status":
 		return ec.fieldContext_RuntimeJob_status(ctx, field)
+	case "createdAt":
+		return ec.fieldContext_RuntimeJob_createdAt(ctx, field)
+	case "startedAt":
+		return ec.fieldContext_RuntimeJob_startedAt(ctx, field)
+	case "endedAt":
+		return ec.fieldContext_RuntimeJob_endedAt(ctx, field)
+	case "exitCode":
+		return ec.fieldContext_RuntimeJob_exitCode(ctx, field)
+	case "error":
+		return ec.fieldContext_RuntimeJob_error(ctx, field)
+	case "phaseUpdateError":
+		return ec.fieldContext_RuntimeJob_phaseUpdateError(ctx, field)
+	case "logTail":
+		return ec.fieldContext_RuntimeJob_logTail(ctx, field)
+	case "logTruncated":
+		return ec.fieldContext_RuntimeJob_logTruncated(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type RuntimeJob", field.Name)
 }
@@ -987,12 +1176,40 @@ func (ec *executionContext) childFields___Type(ctx context.Context, field graphq
 
 // region    ***************************** args.gotpl *****************************
 
+func (ec *executionContext) field_Mutation_cancelRuntimeJob_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "id",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNID2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["id"] = arg0
+	return args, nil
+}
+
 func (ec *executionContext) field_Mutation_createFlow_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
 	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input",
 		func(ctx context.Context, v any) (model.CreateFlowInput, error) {
 			return ec.unmarshalNCreateFlowInput2githubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐCreateFlowInput(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["input"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Mutation_launchFlowPhase_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input",
+		func(ctx context.Context, v any) (model.LaunchFlowPhaseInput, error) {
+			return ec.unmarshalNLaunchFlowPhaseInput2githubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐLaunchFlowPhaseInput(ctx, v)
 		})
 	if err != nil {
 		return nil, err
@@ -1990,6 +2207,107 @@ func (ec *executionContext) fieldContext_FlowPhase_activeRuntimeJob(_ context.Co
 	return fc, nil
 }
 
+func (ec *executionContext) _LaunchFlowPhasePayload_flowId(ctx context.Context, field graphql.CollectedField, obj *model.LaunchFlowPhasePayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_LaunchFlowPhasePayload_flowId(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.FlowID, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNID2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_LaunchFlowPhasePayload_flowId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("LaunchFlowPhasePayload", field, false, false, errors.New("field of type ID does not have child fields"))
+}
+
+func (ec *executionContext) _LaunchFlowPhasePayload_phaseId(ctx context.Context, field graphql.CollectedField, obj *model.LaunchFlowPhasePayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_LaunchFlowPhasePayload_phaseId(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.PhaseID, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNID2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_LaunchFlowPhasePayload_phaseId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("LaunchFlowPhasePayload", field, false, false, errors.New("field of type ID does not have child fields"))
+}
+
+func (ec *executionContext) _LaunchFlowPhasePayload_launchId(ctx context.Context, field graphql.CollectedField, obj *model.LaunchFlowPhasePayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_LaunchFlowPhasePayload_launchId(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.LaunchID, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNID2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_LaunchFlowPhasePayload_launchId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("LaunchFlowPhasePayload", field, false, false, errors.New("field of type ID does not have child fields"))
+}
+
+func (ec *executionContext) _LaunchFlowPhasePayload_job(ctx context.Context, field graphql.CollectedField, obj *model.LaunchFlowPhasePayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_LaunchFlowPhasePayload_job(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Job, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.RuntimeJob) graphql.Marshaler {
+			return ec.marshalNRuntimeJob2ᚖgithubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐRuntimeJob(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_LaunchFlowPhasePayload_job(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "LaunchFlowPhasePayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_RuntimeJob(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Merge_status(ctx context.Context, field graphql.CollectedField, obj *model.Merge) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -2097,6 +2415,94 @@ func (ec *executionContext) fieldContext_Mutation_createFlow(ctx context.Context
 	}()
 	ctx = graphql.WithFieldContext(ctx, fc)
 	if fc.Args, err = ec.field_Mutation_createFlow_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_launchFlowPhase(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Mutation_launchFlowPhase(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().LaunchFlowPhase(ctx, fc.Args["input"].(model.LaunchFlowPhaseInput))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.LaunchFlowPhasePayload) graphql.Marshaler {
+			return ec.marshalNLaunchFlowPhasePayload2ᚖgithubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐLaunchFlowPhasePayload(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Mutation_launchFlowPhase(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_LaunchFlowPhasePayload(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_launchFlowPhase_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_cancelRuntimeJob(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Mutation_cancelRuntimeJob(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().CancelRuntimeJob(ctx, fc.Args["id"].(string))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.RuntimeJob) graphql.Marshaler {
+			return ec.marshalNRuntimeJob2ᚖgithubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐRuntimeJob(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Mutation_cancelRuntimeJob(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_RuntimeJob(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_cancelRuntimeJob_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
 		ec.Error(ctx, err)
 		return fc, err
 	}
@@ -2495,6 +2901,52 @@ func (ec *executionContext) fieldContext_RuntimeJob_id(_ context.Context, field 
 	return graphql.NewScalarFieldContext("RuntimeJob", field, false, false, errors.New("field of type ID does not have child fields"))
 }
 
+func (ec *executionContext) _RuntimeJob_launchId(ctx context.Context, field graphql.CollectedField, obj *model.RuntimeJob) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_RuntimeJob_launchId(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.LaunchID, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNID2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_RuntimeJob_launchId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("RuntimeJob", field, false, false, errors.New("field of type ID does not have child fields"))
+}
+
+func (ec *executionContext) _RuntimeJob_flowId(ctx context.Context, field graphql.CollectedField, obj *model.RuntimeJob) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_RuntimeJob_flowId(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.FlowID, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNID2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_RuntimeJob_flowId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("RuntimeJob", field, false, false, errors.New("field of type ID does not have child fields"))
+}
+
 func (ec *executionContext) _RuntimeJob_phaseId(ctx context.Context, field graphql.CollectedField, obj *model.RuntimeJob) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -2539,6 +2991,190 @@ func (ec *executionContext) _RuntimeJob_status(ctx context.Context, field graphq
 }
 func (ec *executionContext) fieldContext_RuntimeJob_status(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("RuntimeJob", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _RuntimeJob_createdAt(ctx context.Context, field graphql.CollectedField, obj *model.RuntimeJob) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_RuntimeJob_createdAt(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.CreatedAt, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v time.Time) graphql.Marshaler {
+			return ec.marshalNTime2timeᚐTime(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_RuntimeJob_createdAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("RuntimeJob", field, false, false, errors.New("field of type Time does not have child fields"))
+}
+
+func (ec *executionContext) _RuntimeJob_startedAt(ctx context.Context, field graphql.CollectedField, obj *model.RuntimeJob) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_RuntimeJob_startedAt(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.StartedAt, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *time.Time) graphql.Marshaler {
+			return ec.marshalOTime2ᚖtimeᚐTime(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_RuntimeJob_startedAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("RuntimeJob", field, false, false, errors.New("field of type Time does not have child fields"))
+}
+
+func (ec *executionContext) _RuntimeJob_endedAt(ctx context.Context, field graphql.CollectedField, obj *model.RuntimeJob) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_RuntimeJob_endedAt(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.EndedAt, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *time.Time) graphql.Marshaler {
+			return ec.marshalOTime2ᚖtimeᚐTime(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_RuntimeJob_endedAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("RuntimeJob", field, false, false, errors.New("field of type Time does not have child fields"))
+}
+
+func (ec *executionContext) _RuntimeJob_exitCode(ctx context.Context, field graphql.CollectedField, obj *model.RuntimeJob) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_RuntimeJob_exitCode(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ExitCode, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *int) graphql.Marshaler {
+			return ec.marshalOInt2ᚖint(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_RuntimeJob_exitCode(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("RuntimeJob", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _RuntimeJob_error(ctx context.Context, field graphql.CollectedField, obj *model.RuntimeJob) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_RuntimeJob_error(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Error, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_RuntimeJob_error(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("RuntimeJob", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _RuntimeJob_phaseUpdateError(ctx context.Context, field graphql.CollectedField, obj *model.RuntimeJob) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_RuntimeJob_phaseUpdateError(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.PhaseUpdateError, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_RuntimeJob_phaseUpdateError(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("RuntimeJob", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _RuntimeJob_logTail(ctx context.Context, field graphql.CollectedField, obj *model.RuntimeJob) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_RuntimeJob_logTail(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.LogTail, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_RuntimeJob_logTail(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("RuntimeJob", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _RuntimeJob_logTruncated(ctx context.Context, field graphql.CollectedField, obj *model.RuntimeJob) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_RuntimeJob_logTruncated(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.LogTruncated, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_RuntimeJob_logTruncated(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("RuntimeJob", field, false, false, errors.New("field of type Boolean does not have child fields"))
 }
 
 func (ec *executionContext) _SetFlowPhaseStatusPayload_flow(ctx context.Context, field graphql.CollectedField, obj *model.SetFlowPhaseStatusPayload) (ret graphql.Marshaler) {
@@ -3715,6 +4351,57 @@ func (ec *executionContext) unmarshalInputCreateFlowInput(ctx context.Context, o
 	return it, nil
 }
 
+func (ec *executionContext) unmarshalInputLaunchFlowPhaseInput(ctx context.Context, obj any) (model.LaunchFlowPhaseInput, error) {
+	var it model.LaunchFlowPhaseInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"flowId", "phaseId", "agentCommand", "reasoningEffort"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "flowId":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("flowId"))
+			data, err := ec.unmarshalNID2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.FlowID = data
+		case "phaseId":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("phaseId"))
+			data, err := ec.unmarshalNID2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.PhaseID = data
+		case "agentCommand":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("agentCommand"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.AgentCommand = data
+		case "reasoningEffort":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("reasoningEffort"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ReasoningEffort = data
+		}
+	}
+	return it, nil
+}
+
 func (ec *executionContext) unmarshalInputSetFlowPhaseStatusInput(ctx context.Context, obj any) (model.SetFlowPhaseStatusInput, error) {
 	var it model.SetFlowPhaseStatusInput
 	if obj == nil {
@@ -4034,6 +4721,59 @@ func (ec *executionContext) _FlowPhase(ctx context.Context, sel ast.SelectionSet
 	return out
 }
 
+var launchFlowPhasePayloadImplementors = []string{"LaunchFlowPhasePayload"}
+
+func (ec *executionContext) _LaunchFlowPhasePayload(ctx context.Context, sel ast.SelectionSet, obj *model.LaunchFlowPhasePayload) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, launchFlowPhasePayloadImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("LaunchFlowPhasePayload")
+		case "flowId":
+			out.Values[i] = ec._LaunchFlowPhasePayload_flowId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "phaseId":
+			out.Values[i] = ec._LaunchFlowPhasePayload_phaseId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "launchId":
+			out.Values[i] = ec._LaunchFlowPhasePayload_launchId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "job":
+			out.Values[i] = ec._LaunchFlowPhasePayload_job(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
 var mergeImplementors = []string{"Merge"}
 
 func (ec *executionContext) _Merge(ctx context.Context, sel ast.SelectionSet, obj *model.Merge) graphql.Marshaler {
@@ -4105,6 +4845,20 @@ func (ec *executionContext) _Mutation(ctx context.Context, sel ast.SelectionSet)
 		case "createFlow":
 			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
 				return ec._Mutation_createFlow(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "launchFlowPhase":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_launchFlowPhase(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "cancelRuntimeJob":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_cancelRuntimeJob(ctx, field)
 			})
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
@@ -4338,6 +5092,16 @@ func (ec *executionContext) _RuntimeJob(ctx context.Context, sel ast.SelectionSe
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "launchId":
+			out.Values[i] = ec._RuntimeJob_launchId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "flowId":
+			out.Values[i] = ec._RuntimeJob_flowId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		case "phaseId":
 			out.Values[i] = ec._RuntimeJob_phaseId(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
@@ -4345,6 +5109,46 @@ func (ec *executionContext) _RuntimeJob(ctx context.Context, sel ast.SelectionSe
 			}
 		case "status":
 			out.Values[i] = ec._RuntimeJob_status(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "createdAt":
+			out.Values[i] = ec._RuntimeJob_createdAt(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "startedAt":
+			out.Values[i] = ec._RuntimeJob_startedAt(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "endedAt":
+			out.Values[i] = ec._RuntimeJob_endedAt(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "exitCode":
+			out.Values[i] = ec._RuntimeJob_exitCode(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "error":
+			out.Values[i] = ec._RuntimeJob_error(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "phaseUpdateError":
+			out.Values[i] = ec._RuntimeJob_phaseUpdateError(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "logTail":
+			out.Values[i] = ec._RuntimeJob_logTail(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "logTruncated":
+			out.Values[i] = ec._RuntimeJob_logTruncated(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -4974,6 +5778,25 @@ func (ec *executionContext) marshalNInt2int(ctx context.Context, sel ast.Selecti
 	return res
 }
 
+func (ec *executionContext) unmarshalNLaunchFlowPhaseInput2githubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐLaunchFlowPhaseInput(ctx context.Context, v any) (model.LaunchFlowPhaseInput, error) {
+	res, err := ec.unmarshalInputLaunchFlowPhaseInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNLaunchFlowPhasePayload2githubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐLaunchFlowPhasePayload(ctx context.Context, sel ast.SelectionSet, v model.LaunchFlowPhasePayload) graphql.Marshaler {
+	return ec._LaunchFlowPhasePayload(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNLaunchFlowPhasePayload2ᚖgithubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐLaunchFlowPhasePayload(ctx context.Context, sel ast.SelectionSet, v *model.LaunchFlowPhasePayload) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._LaunchFlowPhasePayload(ctx, sel, v)
+}
+
 func (ec *executionContext) marshalNMerge2ᚖgithubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐMerge(ctx context.Context, sel ast.SelectionSet, v *model.Merge) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
@@ -4992,6 +5815,20 @@ func (ec *executionContext) marshalNPullRequest2ᚖgithubᚗcomᚋbrianᚑbell�
 		return graphql.Null
 	}
 	return ec._PullRequest(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNRuntimeJob2githubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐRuntimeJob(ctx context.Context, sel ast.SelectionSet, v model.RuntimeJob) graphql.Marshaler {
+	return ec._RuntimeJob(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNRuntimeJob2ᚖgithubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐRuntimeJob(ctx context.Context, sel ast.SelectionSet, v *model.RuntimeJob) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._RuntimeJob(ctx, sel, v)
 }
 
 func (ec *executionContext) unmarshalNSetFlowPhaseStatusInput2githubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐSetFlowPhaseStatusInput(ctx context.Context, v any) (model.SetFlowPhaseStatusInput, error) {
@@ -5313,6 +6150,24 @@ func (ec *executionContext) marshalOFlowStatus2ᚖgithubᚗcomᚋbrianᚑbellᚋ
 		return graphql.Null
 	}
 	return v
+}
+
+func (ec *executionContext) unmarshalOInt2ᚖint(ctx context.Context, v any) (*int, error) {
+	if v == nil {
+		return nil, nil
+	}
+	res, err := graphql.UnmarshalInt(v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalOInt2ᚖint(ctx context.Context, sel ast.SelectionSet, v *int) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	_ = sel
+	_ = ctx
+	res := graphql.MarshalInt(*v)
+	return res
 }
 
 func (ec *executionContext) marshalORuntimeJob2ᚖgithubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐRuntimeJob(ctx context.Context, sel ast.SelectionSet, v *model.RuntimeJob) graphql.Marshaler {

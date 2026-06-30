@@ -2,6 +2,7 @@ package server_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -18,8 +19,9 @@ import (
 	"github.com/brian-bell/flowstate/flowstore"
 	"github.com/brian-bell/flowstate/planstore"
 	"github.com/brian-bell/flowstate/server"
-	"github.com/brian-bell/flowstate/server/flowcreate"
 	"github.com/brian-bell/flowstate/server/flowquery"
+	"github.com/brian-bell/flowstate/server/graph"
+	"github.com/brian-bell/flowstate/server/runtimejobs"
 )
 
 func TestHandlerGraphQLListsFlowsWithFilteringAndComputedFields(t *testing.T) {
@@ -129,6 +131,106 @@ func TestHandlerGraphQLListsFlowsWithFilteringAndComputedFields(t *testing.T) {
 	}
 }
 
+func TestHandlerGraphQLCreateFlowMutationIsAvailable(t *testing.T) {
+	store, _ := newFlowGraphQLStore(t)
+	creator := &staticFlowCreator{
+		record: flowstore.FlowRecord{
+			FlowID:       "created-flow",
+			Title:        "Created Flow",
+			Instructions: "create through graphql",
+			RepoPath:     "/dev/alpha",
+			BaseRef:      "main",
+			Phases:       []flowstore.FlowPhase{{PhaseID: "plan", Title: "Plan", Status: flowstore.PhaseReady}},
+		},
+	}
+	handler := newFlowGraphQLHandlerWithOptions(t, server.HandlerOptions{
+		FlowStore:   store,
+		FlowCreator: creator,
+	})
+
+	var out struct {
+		Data struct {
+			CreateFlow struct {
+				ID       string `json:"id"`
+				Title    string `json:"title"`
+				BaseRef  string `json:"baseRef"`
+				RepoPath string `json:"repoPath"`
+				Phases   []struct {
+					PhaseID string `json:"phaseId"`
+				} `json:"phases"`
+			} `json:"createFlow"`
+		} `json:"data"`
+		Errors []any `json:"errors"`
+	}
+	postGraphQL(t, handler, `mutation($input: CreateFlowInput!) {
+		createFlow(input: $input) { id title baseRef repoPath phases { phaseId } }
+	}`, map[string]any{"input": map[string]any{
+		"repoPath":     "/dev/alpha",
+		"title":        "Created Flow",
+		"instructions": "create through graphql",
+		"baseRef":      "main",
+	}}, &out)
+	if len(out.Errors) != 0 {
+		t.Fatalf("GraphQL errors: %#v", out.Errors)
+	}
+	if creator.input.RepoPath != "/dev/alpha" ||
+		out.Data.CreateFlow.ID != "created-flow" ||
+		out.Data.CreateFlow.BaseRef != "main" ||
+		len(out.Data.CreateFlow.Phases) != 1 ||
+		out.Data.CreateFlow.Phases[0].PhaseID != "plan" {
+		t.Fatalf("createFlow response = %#v input = %#v", out.Data.CreateFlow, creator.input)
+	}
+}
+
+func TestHandlerGraphQLCreateFlowIgnoresRuntimeLookupFailureAfterPersist(t *testing.T) {
+	store, _ := newFlowGraphQLStore(t)
+	creator := &staticFlowCreator{
+		record: flowstore.FlowRecord{
+			FlowID:       "created-runtime-fallback",
+			Title:        "Created Flow",
+			Instructions: "create through graphql",
+			RepoPath:     "/dev/alpha",
+			Phases:       []flowstore.FlowPhase{{PhaseID: "plan", Title: "Plan", Status: flowstore.PhaseReady}},
+		},
+	}
+	handler := newFlowGraphQLHandlerWithOptions(t, server.HandlerOptions{
+		FlowStore:    store,
+		FlowCreator:  creator,
+		RuntimeJobs:  failingRuntimeJobLookup{},
+		AgentCommand: "codex",
+	})
+
+	var out struct {
+		Data struct {
+			CreateFlow struct {
+				ID     string `json:"id"`
+				Phases []struct {
+					PhaseID          string `json:"phaseId"`
+					ActiveRuntimeJob *struct {
+						ID string `json:"id"`
+					} `json:"activeRuntimeJob"`
+				} `json:"phases"`
+			} `json:"createFlow"`
+		} `json:"data"`
+		Errors []any `json:"errors"`
+	}
+	postGraphQL(t, handler, `mutation($input: CreateFlowInput!) {
+		createFlow(input: $input) { id phases { phaseId activeRuntimeJob { id } } }
+	}`, map[string]any{"input": map[string]any{
+		"repoPath":     "/dev/alpha",
+		"title":        "Created Flow",
+		"instructions": "create through graphql",
+	}}, &out)
+	if len(out.Errors) != 0 {
+		t.Fatalf("GraphQL errors: %#v", out.Errors)
+	}
+	if out.Data.CreateFlow.ID != "created-runtime-fallback" ||
+		len(out.Data.CreateFlow.Phases) != 1 ||
+		out.Data.CreateFlow.Phases[0].ActiveRuntimeJob != nil {
+		t.Fatalf("createFlow response = %#v, want persisted flow without runtime decoration", out.Data.CreateFlow)
+	}
+}
+
 func TestHandlerGraphQLReadsOneFlowAndHandlesMissingOrInvalidID(t *testing.T) {
 	store, _ := newFlowGraphQLStore(t)
 	record := createGraphQLFlow(t, store, flowstore.FlowRecord{
@@ -188,304 +290,6 @@ func TestHandlerGraphQLRejectsInvalidFlowStatusEnumBeforeResolver(t *testing.T) 
 	}, &out)
 	if len(out.Errors) == 0 {
 		t.Fatalf("invalid enum response had no errors: %#v", out)
-	}
-}
-
-func TestHandlerGraphQLCreateFlowCreatesWorktreeAndCanReadBack(t *testing.T) {
-	store, _ := newFlowGraphQLStore(t)
-	repoPath := newGraphQLGitRepo(t, "alpha")
-	handler := newFlowGraphQLHandlerWithCreator(t, store, flowcreate.New(flowcreate.Options{Store: store}))
-
-	var created struct {
-		Data struct {
-			CreateFlow struct {
-				ID                  string `json:"id"`
-				Title               string `json:"title"`
-				Instructions        string `json:"instructions"`
-				RepoPath            string `json:"repoPath"`
-				WorktreePath        string `json:"worktreePath"`
-				Branch              string `json:"branch"`
-				BaseRef             string `json:"baseRef"`
-				Commit              string `json:"commit"`
-				NextLaunchablePhase *struct {
-					PhaseID string `json:"phaseId"`
-				} `json:"nextLaunchablePhase"`
-				Phases []struct {
-					PhaseID        string  `json:"phaseId"`
-					Status         *string `json:"status"`
-					LatestLaunchID *string `json:"latestLaunchId"`
-					Launchable     bool    `json:"launchable"`
-				} `json:"phases"`
-			} `json:"createFlow"`
-		} `json:"data"`
-		Errors []any `json:"errors"`
-	}
-	postGraphQL(t, handler, `mutation($input: CreateFlowInput!) {
-		createFlow(input: $input) {
-			id
-			title
-			instructions
-			repoPath
-			worktreePath
-			branch
-			baseRef
-			commit
-			nextLaunchablePhase { phaseId }
-			phases { phaseId status latestLaunchId launchable }
-		}
-	}`, map[string]any{"input": map[string]any{
-		"repoPath":     repoPath,
-		"title":        "Parked Flow",
-		"instructions": "Write the implementation plan",
-		"baseRef":      "main",
-	}}, &created)
-	if len(created.Errors) != 0 {
-		t.Fatalf("GraphQL errors: %#v", created.Errors)
-	}
-
-	flow := created.Data.CreateFlow
-	wantWorktreePath := filepath.Join(filepath.Dir(repoPath), filepath.Base(repoPath)+"-worktrees", "flow-parked-flow")
-	if flow.ID == "" ||
-		flow.Title != "Parked Flow" ||
-		flow.Instructions != "Write the implementation plan" ||
-		flow.RepoPath != repoPath ||
-		flow.WorktreePath != wantWorktreePath ||
-		flow.Branch != "flow/parked-flow" ||
-		flow.BaseRef != "main" ||
-		flow.Commit == "" {
-		t.Fatalf("created flow = %#v", flow)
-	}
-	if got := strings.TrimSpace(mustGitOutput(t, flow.WorktreePath, "branch", "--show-current")); got != "flow/parked-flow" {
-		t.Fatalf("worktree branch = %q, want flow/parked-flow", got)
-	}
-	if flow.NextLaunchablePhase == nil || flow.NextLaunchablePhase.PhaseID != "plan" {
-		t.Fatalf("next launchable phase = %#v, want plan", flow.NextLaunchablePhase)
-	}
-	if len(flow.Phases) == 0 ||
-		flow.Phases[0].PhaseID != "plan" ||
-		flow.Phases[0].Status == nil ||
-		*flow.Phases[0].Status != "READY" ||
-		flow.Phases[0].LatestLaunchID != nil ||
-		!flow.Phases[0].Launchable {
-		t.Fatalf("plan phase = %#v", flow.Phases)
-	}
-
-	var readback struct {
-		Data struct {
-			Flow *struct {
-				ID                  string `json:"id"`
-				WorktreePath        string `json:"worktreePath"`
-				Branch              string `json:"branch"`
-				BaseRef             string `json:"baseRef"`
-				Commit              string `json:"commit"`
-				NextLaunchablePhase *struct {
-					PhaseID string `json:"phaseId"`
-				} `json:"nextLaunchablePhase"`
-				Phases []struct {
-					PhaseID string  `json:"phaseId"`
-					Status  *string `json:"status"`
-				} `json:"phases"`
-			} `json:"flow"`
-		} `json:"data"`
-		Errors []any `json:"errors"`
-	}
-	postGraphQL(t, handler, `query($id: ID!) {
-		flow(id: $id) {
-			id
-			worktreePath
-			branch
-			baseRef
-			commit
-			nextLaunchablePhase { phaseId }
-			phases { phaseId status }
-		}
-	}`, map[string]any{"id": flow.ID}, &readback)
-	if len(readback.Errors) != 0 {
-		t.Fatalf("readback errors: %#v", readback.Errors)
-	}
-	if readback.Data.Flow == nil ||
-		readback.Data.Flow.WorktreePath != flow.WorktreePath ||
-		readback.Data.Flow.Branch != flow.Branch ||
-		readback.Data.Flow.BaseRef != flow.BaseRef ||
-		readback.Data.Flow.Commit != flow.Commit ||
-		readback.Data.Flow.NextLaunchablePhase == nil ||
-		readback.Data.Flow.NextLaunchablePhase.PhaseID != "plan" ||
-		len(readback.Data.Flow.Phases) == 0 ||
-		readback.Data.Flow.Phases[0].Status == nil ||
-		*readback.Data.Flow.Phases[0].Status != "READY" {
-		t.Fatalf("readback flow = %#v, want created metadata and ready plan", readback.Data.Flow)
-	}
-}
-
-func TestHandlerGraphQLCreateFlowRejectsMissingOrInvalidRepoPath(t *testing.T) {
-	store, _ := newFlowGraphQLStore(t)
-	handler := newFlowGraphQLHandlerWithCreator(t, store, flowcreate.New(flowcreate.Options{Store: store}))
-
-	var missing struct {
-		Data   any   `json:"data"`
-		Errors []any `json:"errors"`
-	}
-	postGraphQLWithStatus(t, handler, http.StatusUnprocessableEntity, `mutation($input: CreateFlowInput!) {
-		createFlow(input: $input) { id }
-	}`, map[string]any{"input": map[string]any{
-		"title":        "No Repo",
-		"instructions": "missing repo path",
-	}}, &missing)
-	if len(missing.Errors) == 0 {
-		t.Fatalf("missing repoPath response had no errors: %#v", missing)
-	}
-
-	var relative struct {
-		Data   any   `json:"data"`
-		Errors []any `json:"errors"`
-	}
-	postGraphQL(t, handler, `mutation($input: CreateFlowInput!) {
-		createFlow(input: $input) { id }
-	}`, map[string]any{"input": map[string]any{
-		"repoPath":     "relative/repo",
-		"title":        "Relative Repo",
-		"instructions": "invalid repo path",
-	}}, &relative)
-	if len(relative.Errors) == 0 {
-		t.Fatalf("relative repoPath response had no errors: %#v", relative)
-	}
-
-	blankHandler := newFlowGraphQLHandlerWithCreator(t, store, flowcreate.New(flowcreate.Options{
-		Store: store,
-		CreateWorktree: func(string, string, string) (actions.FlowWorktreeCreateResult, error) {
-			t.Fatal("CreateWorktree should not run for a blank repo path")
-			return actions.FlowWorktreeCreateResult{}, nil
-		},
-	}))
-	var blank struct {
-		Data   any   `json:"data"`
-		Errors []any `json:"errors"`
-	}
-	postGraphQL(t, blankHandler, `mutation($input: CreateFlowInput!) {
-		createFlow(input: $input) { id }
-	}`, map[string]any{"input": map[string]any{
-		"repoPath":     "   ",
-		"title":        "Blank Repo",
-		"instructions": "invalid repo path",
-	}}, &blank)
-	if len(blank.Errors) == 0 {
-		t.Fatalf("blank repoPath response had no errors: %#v", blank)
-	}
-}
-
-func TestHandlerGraphQLCreateFlowReturnsBlockedFlowForWorktreeFailure(t *testing.T) {
-	store, _ := newFlowGraphQLStore(t)
-	handler := newFlowGraphQLHandlerWithCreator(t, store, flowcreate.New(flowcreate.Options{
-		Store: store,
-		CreateWorktree: func(string, string, string) (actions.FlowWorktreeCreateResult, error) {
-			return actions.FlowWorktreeCreateResult{}, errGraphQLBranchExists{}
-		},
-	}))
-
-	var out struct {
-		Data struct {
-			CreateFlow struct {
-				ID     string `json:"id"`
-				Phases []struct {
-					PhaseID string  `json:"phaseId"`
-					Status  *string `json:"status"`
-					Notes   string  `json:"notes"`
-				} `json:"phases"`
-			} `json:"createFlow"`
-		} `json:"data"`
-		Errors []any `json:"errors"`
-	}
-	postGraphQL(t, handler, `mutation($input: CreateFlowInput!) {
-		createFlow(input: $input) { id phases { phaseId status notes } }
-	}`, map[string]any{"input": map[string]any{
-		"repoPath":     t.TempDir(),
-		"title":        "Blocked Worktree",
-		"instructions": "show blocked phase",
-	}}, &out)
-	if len(out.Errors) != 0 {
-		t.Fatalf("GraphQL errors: %#v", out.Errors)
-	}
-	if out.Data.CreateFlow.ID == "" ||
-		len(out.Data.CreateFlow.Phases) == 0 ||
-		out.Data.CreateFlow.Phases[0].Status == nil ||
-		*out.Data.CreateFlow.Phases[0].Status != "BLOCKED" ||
-		!strings.Contains(out.Data.CreateFlow.Phases[0].Notes, "Worktree creation failed: branch exists") {
-		t.Fatalf("mutation response = %#v", out.Data.CreateFlow)
-	}
-
-	var readback struct {
-		Data struct {
-			Flow *struct {
-				Phases []struct {
-					Status *string `json:"status"`
-					Notes  string  `json:"notes"`
-				} `json:"phases"`
-			} `json:"flow"`
-		} `json:"data"`
-		Errors []any `json:"errors"`
-	}
-	postGraphQL(t, handler, `query($id: ID!) {
-		flow(id: $id) { phases { status notes } }
-	}`, map[string]any{"id": out.Data.CreateFlow.ID}, &readback)
-	if len(readback.Errors) != 0 ||
-		readback.Data.Flow == nil ||
-		len(readback.Data.Flow.Phases) == 0 ||
-		readback.Data.Flow.Phases[0].Status == nil ||
-		*readback.Data.Flow.Phases[0].Status != "BLOCKED" {
-		t.Fatalf("readback = %#v errors %#v", readback.Data.Flow, readback.Errors)
-	}
-}
-
-func TestHandlerGraphQLCreateFlowReturnsBlockedFlowForBootstrapFailure(t *testing.T) {
-	store, _ := newFlowGraphQLStore(t)
-	handler := newFlowGraphQLHandlerWithCreator(t, store, flowcreate.New(flowcreate.Options{
-		Store: store,
-		CreateWorktree: func(string, string, string) (actions.FlowWorktreeCreateResult, error) {
-			return actions.FlowWorktreeCreateResult{WorktreePath: "/tmp/alpha-worktrees/flow-bootstrap", Branch: "flow/bootstrap"}, nil
-		},
-		ResolveCommit: func(string) string {
-			return "abc123"
-		},
-		BootstrapHookForRepo: func(string) (actions.BootstrapHook, bool) {
-			return actions.BootstrapHook{Script: ".flowstate/bootstrap"}, true
-		},
-		RunBootstrapHook: func(actions.BootstrapContext, actions.BootstrapHook) error {
-			return errGraphQLBootstrap{}
-		},
-	}))
-
-	var out struct {
-		Data struct {
-			CreateFlow struct {
-				WorktreePath string `json:"worktreePath"`
-				Branch       string `json:"branch"`
-				Commit       string `json:"commit"`
-				Phases       []struct {
-					Status *string `json:"status"`
-					Notes  string  `json:"notes"`
-				} `json:"phases"`
-			} `json:"createFlow"`
-		} `json:"data"`
-		Errors []any `json:"errors"`
-	}
-	postGraphQL(t, handler, `mutation($input: CreateFlowInput!) {
-		createFlow(input: $input) { worktreePath branch commit phases { status notes } }
-	}`, map[string]any{"input": map[string]any{
-		"repoPath":     t.TempDir(),
-		"title":        "Blocked Bootstrap",
-		"instructions": "show blocked phase",
-	}}, &out)
-	if len(out.Errors) != 0 {
-		t.Fatalf("GraphQL errors: %#v", out.Errors)
-	}
-	if out.Data.CreateFlow.WorktreePath != "/tmp/alpha-worktrees/flow-bootstrap" ||
-		out.Data.CreateFlow.Branch != "flow/bootstrap" ||
-		out.Data.CreateFlow.Commit != "abc123" ||
-		len(out.Data.CreateFlow.Phases) == 0 ||
-		out.Data.CreateFlow.Phases[0].Status == nil ||
-		*out.Data.CreateFlow.Phases[0].Status != "BLOCKED" ||
-		!strings.Contains(out.Data.CreateFlow.Phases[0].Notes, "Bootstrap hook failed: missing env file") {
-		t.Fatalf("mutation response = %#v", out.Data.CreateFlow)
 	}
 }
 
@@ -1034,6 +838,552 @@ func TestHandlerGraphQLReturnsNullEnumForUnknownPersistedPhaseStatus(t *testing.
 	}
 }
 
+func TestHandlerGraphQLLaunchFlowPhaseStartsRuntimeJobAndMarksPhaseRunning(t *testing.T) {
+	store, _ := newFlowGraphQLStore(t)
+	record := createGraphQLFlow(t, store, flowstore.FlowRecord{
+		FlowID:       "launch-flow",
+		Title:        "Launch Flow",
+		Instructions: "launch implementation",
+		RepoPath:     t.TempDir(),
+		WorktreePath: t.TempDir(),
+		Branch:       "flow/launch",
+		Commit:       "abc123",
+	})
+	record = completeGraphQLPhase(t, store, record.FlowID, "plan", flowstore.PhaseUpdate{Status: flowstore.PhaseCompleted})
+	record = completeGraphQLPhase(t, store, record.FlowID, "plan-review", flowstore.PhaseUpdate{Status: flowstore.PhaseCompleted, Outcome: flowstore.OutcomeApproved})
+	if phase := phaseByIDForTest(record, "implementation"); phase.Status != flowstore.PhaseReady {
+		t.Fatalf("implementation status = %q, want ready", phase.Status)
+	}
+	var launched []actions.AgentLaunchContext
+	registry := runtimejobs.NewRegistry(runtimejobs.Options{
+		BuildCommand: func(ctx context.Context, launch actions.AgentLaunchContext) (*exec.Cmd, error) {
+			launched = append(launched, launch)
+			return exec.CommandContext(ctx, "/bin/sh", "-c", "printf 'done\\n'"), nil
+		},
+		UpdatePhase: store.SetPhase,
+	})
+	handler := newFlowGraphQLHandlerWithOptions(t, server.HandlerOptions{
+		FlowStore:            store,
+		RuntimeJobs:          registry,
+		RuntimeStarter:       registry,
+		AgentCommand:         "codex",
+		CodexReasoningEffort: "high",
+		StateRoot:            t.TempDir(),
+	})
+
+	var out struct {
+		Data struct {
+			LaunchFlowPhase struct {
+				FlowID   string `json:"flowId"`
+				PhaseID  string `json:"phaseId"`
+				LaunchID string `json:"launchId"`
+				Job      struct {
+					ID        string `json:"id"`
+					LaunchID  string `json:"launchId"`
+					FlowID    string `json:"flowId"`
+					PhaseID   string `json:"phaseId"`
+					Status    string `json:"status"`
+					CreatedAt string `json:"createdAt"`
+				} `json:"job"`
+			} `json:"launchFlowPhase"`
+		} `json:"data"`
+		Errors []any `json:"errors"`
+	}
+	postGraphQL(t, handler, `mutation($input: LaunchFlowPhaseInput!) {
+		launchFlowPhase(input: $input) {
+			flowId
+			phaseId
+			launchId
+			job { id launchId flowId phaseId status createdAt }
+		}
+	}`, map[string]any{"input": map[string]any{"flowId": record.FlowID, "phaseId": "implementation"}}, &out)
+	if len(out.Errors) != 0 {
+		t.Fatalf("GraphQL errors: %#v", out.Errors)
+	}
+	payload := out.Data.LaunchFlowPhase
+	if payload.FlowID != record.FlowID || payload.PhaseID != "implementation" || payload.LaunchID == "" {
+		t.Fatalf("payload = %#v, want launch metadata", payload)
+	}
+	if payload.Job.ID == "" || payload.Job.LaunchID != payload.LaunchID || payload.Job.Status != string(runtimejobs.StatusQueued) {
+		t.Fatalf("job payload = %#v, want queued runtime job", payload.Job)
+	}
+	updated, err := store.Read(record.FlowID)
+	if err != nil {
+		t.Fatalf("Read updated flow: %v", err)
+	}
+	phase := phaseByIDForTest(updated, "implementation")
+	if phase.Status != flowstore.PhaseRunning || flowstore.LatestPhaseLaunchID(phase) != payload.LaunchID {
+		t.Fatalf("implementation phase = %#v, want running with launch ID %q", phase, payload.LaunchID)
+	}
+	var duplicate struct {
+		Data   any   `json:"data"`
+		Errors []any `json:"errors"`
+	}
+	postGraphQL(t, handler, `mutation($input: LaunchFlowPhaseInput!) {
+		launchFlowPhase(input: $input) { launchId }
+	}`, map[string]any{"input": map[string]any{"flowId": record.FlowID, "phaseId": "implementation"}}, &duplicate)
+	if len(duplicate.Errors) == 0 {
+		t.Fatalf("duplicate launch response had no errors: %#v", duplicate)
+	}
+	final := waitForRuntimeJobStatus(t, registry, payload.Job.ID, runtimejobs.StatusSucceeded)
+	if final.ExitCode == nil || *final.ExitCode != 0 {
+		t.Fatalf("final job = %#v, want zero exit", final)
+	}
+	updated, err = store.Read(record.FlowID)
+	if err != nil {
+		t.Fatalf("Read after job: %v", err)
+	}
+	if phase := phaseByIDForTest(updated, "implementation"); phase.Status != flowstore.PhaseRunning {
+		t.Fatalf("zero-exit job changed phase to %q, want running", phase.Status)
+	}
+	if len(launched) != 1 ||
+		launched[0].Command != "codex" ||
+		launched[0].ReasoningEffort != "high" ||
+		!launched[0].Headless ||
+		launched[0].Embedded ||
+		!strings.Contains(launched[0].InitialPrompt, "Use the commit skill before completing this phase.") {
+		t.Fatalf("launch context = %#v, want headless codex implementation launch", launched)
+	}
+
+	var query struct {
+		Data struct {
+			Flow *struct {
+				Phases []struct {
+					PhaseID          string `json:"phaseId"`
+					ActiveRuntimeJob *struct {
+						ID       string `json:"id"`
+						LaunchID string `json:"launchId"`
+						Status   string `json:"status"`
+						LogTail  string `json:"logTail"`
+					} `json:"activeRuntimeJob"`
+				} `json:"phases"`
+			} `json:"flow"`
+		} `json:"data"`
+		Errors []any `json:"errors"`
+	}
+	postGraphQL(t, handler, `query($id: ID!) {
+		flow(id: $id) {
+			phases {
+				phaseId
+				activeRuntimeJob { id launchId status logTail }
+			}
+		}
+	}`, map[string]any{"id": record.FlowID}, &query)
+	if len(query.Errors) != 0 {
+		t.Fatalf("GraphQL query errors: %#v", query.Errors)
+	}
+	job := activeRuntimeJobForTest(query.Data.Flow.Phases, "implementation")
+	if job == nil || job.ID != payload.Job.ID || job.LaunchID != payload.LaunchID || job.Status != string(runtimejobs.StatusSucceeded) || !strings.Contains(job.LogTail, "done") {
+		t.Fatalf("active runtime job = %#v, want completed visible job", job)
+	}
+}
+
+func TestHandlerGraphQLLaunchFlowPhaseRejectsInvalidReasoningEffortBeforeStateChange(t *testing.T) {
+	store, _ := newFlowGraphQLStore(t)
+	record := createGraphQLFlow(t, store, flowstore.FlowRecord{
+		FlowID:       "invalid-effort-flow",
+		Title:        "Invalid Effort Flow",
+		Instructions: "launch implementation",
+		RepoPath:     t.TempDir(),
+		WorktreePath: t.TempDir(),
+	})
+	record = completeGraphQLPhase(t, store, record.FlowID, "plan", flowstore.PhaseUpdate{Status: flowstore.PhaseCompleted})
+	record = completeGraphQLPhase(t, store, record.FlowID, "plan-review", flowstore.PhaseUpdate{Status: flowstore.PhaseCompleted, Outcome: flowstore.OutcomeApproved})
+	registry := runtimejobs.NewRegistry(runtimejobs.Options{
+		BuildCommand: func(ctx context.Context, launch actions.AgentLaunchContext) (*exec.Cmd, error) {
+			t.Fatalf("runtime command should not be built for invalid reasoning effort")
+			return nil, nil
+		},
+		UpdatePhase: store.SetPhase,
+	})
+	handler := newFlowGraphQLHandlerWithOptions(t, server.HandlerOptions{
+		FlowStore:      store,
+		RuntimeJobs:    registry,
+		RuntimeStarter: registry,
+		AgentCommand:   "codex",
+		StateRoot:      t.TempDir(),
+	})
+
+	var out struct {
+		Data   any   `json:"data"`
+		Errors []any `json:"errors"`
+	}
+	postGraphQL(t, handler, `mutation($input: LaunchFlowPhaseInput!) {
+		launchFlowPhase(input: $input) { launchId }
+	}`, map[string]any{"input": map[string]any{
+		"flowId":          record.FlowID,
+		"phaseId":         "implementation",
+		"reasoningEffort": "turbo",
+	}}, &out)
+	if !graphQLErrorsContain(out.Errors, `unsupported reasoning effort "turbo" for codex`) {
+		t.Fatalf("GraphQL errors = %#v, want unsupported reasoning effort", out.Errors)
+	}
+	updated, err := store.Read(record.FlowID)
+	if err != nil {
+		t.Fatalf("Read updated flow: %v", err)
+	}
+	phase := phaseByIDForTest(updated, "implementation")
+	if phase.Status != flowstore.PhaseReady || len(phase.LaunchIDs) != 0 {
+		t.Fatalf("implementation phase = %#v, want ready with no launch IDs", phase)
+	}
+}
+
+func TestHandlerGraphQLLaunchFlowPhaseStartErrorMarksPhaseNeedsAttention(t *testing.T) {
+	store, _ := newFlowGraphQLStore(t)
+	record := createGraphQLFlow(t, store, flowstore.FlowRecord{
+		FlowID:       "start-error-flow",
+		Title:        "Start Error Flow",
+		Instructions: "launch implementation",
+		RepoPath:     t.TempDir(),
+		WorktreePath: t.TempDir(),
+	})
+	record = completeGraphQLPhase(t, store, record.FlowID, "plan", flowstore.PhaseUpdate{Status: flowstore.PhaseCompleted})
+	record = completeGraphQLPhase(t, store, record.FlowID, "plan-review", flowstore.PhaseUpdate{Status: flowstore.PhaseCompleted, Outcome: flowstore.OutcomeApproved})
+	runtime := &startErrorRuntimeProvider{err: errors.New("runtime unavailable")}
+	handler := newFlowGraphQLHandlerWithOptions(t, server.HandlerOptions{
+		FlowStore:         store,
+		RuntimeJobs:       runtime,
+		RuntimeStarter:    runtime,
+		RuntimeController: runtime,
+		AgentCommand:      "codex",
+		StateRoot:         t.TempDir(),
+	})
+
+	var out struct {
+		Data   any   `json:"data"`
+		Errors []any `json:"errors"`
+	}
+	postGraphQL(t, handler, `mutation($input: LaunchFlowPhaseInput!) {
+		launchFlowPhase(input: $input) { launchId }
+	}`, map[string]any{"input": map[string]any{"flowId": record.FlowID, "phaseId": "implementation"}}, &out)
+	if !graphQLErrorsContain(out.Errors, "runtime unavailable") {
+		t.Fatalf("GraphQL errors = %#v, want runtime start failure", out.Errors)
+	}
+	updated, err := store.Read(record.FlowID)
+	if err != nil {
+		t.Fatalf("Read updated flow: %v", err)
+	}
+	phase := phaseByIDForTest(updated, "implementation")
+	if phase.Status != flowstore.PhaseNeedsAttention ||
+		phase.Outcome != "runtime_start_failed" ||
+		!strings.Contains(phase.Notes, "runtime unavailable") ||
+		len(phase.LaunchIDs) != 1 {
+		t.Fatalf("implementation phase after start failure = %#v, want needs_attention with orphan launch noted", phase)
+	}
+}
+
+func TestHandlerGraphQLCancelRuntimeJobStopsJobWithoutPhaseFailure(t *testing.T) {
+	store, _ := newFlowGraphQLStore(t)
+	record := createGraphQLFlow(t, store, flowstore.FlowRecord{
+		FlowID:       "cancel-flow",
+		Title:        "Cancel Flow",
+		Instructions: "cancel implementation",
+		RepoPath:     t.TempDir(),
+		WorktreePath: t.TempDir(),
+	})
+	record = completeGraphQLPhase(t, store, record.FlowID, "plan", flowstore.PhaseUpdate{Status: flowstore.PhaseCompleted})
+	record = completeGraphQLPhase(t, store, record.FlowID, "plan-review", flowstore.PhaseUpdate{Status: flowstore.PhaseCompleted, Outcome: flowstore.OutcomeApproved})
+	registry := runtimejobs.NewRegistry(runtimejobs.Options{
+		BuildCommand: func(ctx context.Context, launch actions.AgentLaunchContext) (*exec.Cmd, error) {
+			return exec.CommandContext(ctx, "/bin/sh", "-c", "sleep 5"), nil
+		},
+		UpdatePhase: store.SetPhase,
+	})
+	defer registry.CancelAll()
+	handler := newFlowGraphQLHandlerWithOptions(t, server.HandlerOptions{
+		FlowStore:      store,
+		RuntimeJobs:    registry,
+		RuntimeStarter: registry,
+		AgentCommand:   "codex",
+		StateRoot:      t.TempDir(),
+	})
+
+	var launch struct {
+		Data struct {
+			LaunchFlowPhase struct {
+				Job struct {
+					ID string `json:"id"`
+				} `json:"job"`
+			} `json:"launchFlowPhase"`
+		} `json:"data"`
+		Errors []any `json:"errors"`
+	}
+	postGraphQL(t, handler, `mutation($input: LaunchFlowPhaseInput!) {
+		launchFlowPhase(input: $input) { job { id } }
+	}`, map[string]any{"input": map[string]any{"flowId": record.FlowID, "phaseId": "implementation"}}, &launch)
+	if len(launch.Errors) != 0 || launch.Data.LaunchFlowPhase.Job.ID == "" {
+		t.Fatalf("launch response = %#v errors %#v", launch.Data.LaunchFlowPhase, launch.Errors)
+	}
+
+	var cancel struct {
+		Data struct {
+			CancelRuntimeJob struct {
+				ID     string `json:"id"`
+				Status string `json:"status"`
+				Error  string `json:"error"`
+			} `json:"cancelRuntimeJob"`
+		} `json:"data"`
+		Errors []any `json:"errors"`
+	}
+	postGraphQL(t, handler, `mutation($id: ID!) {
+		cancelRuntimeJob(id: $id) { id status error }
+	}`, map[string]any{"id": launch.Data.LaunchFlowPhase.Job.ID}, &cancel)
+	if len(cancel.Errors) != 0 {
+		t.Fatalf("cancel errors: %#v", cancel.Errors)
+	}
+	if cancel.Data.CancelRuntimeJob.Status != string(runtimejobs.StatusCanceled) ||
+		cancel.Data.CancelRuntimeJob.Error != "runtime job canceled" {
+		t.Fatalf("cancel payload = %#v, want canceled", cancel.Data.CancelRuntimeJob)
+	}
+	final := waitForRuntimeJobStatus(t, registry, launch.Data.LaunchFlowPhase.Job.ID, runtimejobs.StatusCanceled)
+	if final.Status != runtimejobs.StatusCanceled {
+		t.Fatalf("final job = %#v, want canceled", final)
+	}
+	updated, err := store.Read(record.FlowID)
+	if err != nil {
+		t.Fatalf("Read after cancel: %v", err)
+	}
+	if phase := phaseByIDForTest(updated, "implementation"); phase.Status != flowstore.PhaseReady {
+		t.Fatalf("cancel changed phase to %q, want ready for retry", phase.Status)
+	}
+
+	var retry struct {
+		Data struct {
+			LaunchFlowPhase struct {
+				Job struct {
+					ID string `json:"id"`
+				} `json:"job"`
+			} `json:"launchFlowPhase"`
+		} `json:"data"`
+		Errors []any `json:"errors"`
+	}
+	postGraphQL(t, handler, `mutation($input: LaunchFlowPhaseInput!) {
+		launchFlowPhase(input: $input) { job { id } }
+	}`, map[string]any{"input": map[string]any{"flowId": record.FlowID, "phaseId": "implementation"}}, &retry)
+	if len(retry.Errors) != 0 || retry.Data.LaunchFlowPhase.Job.ID == "" {
+		t.Fatalf("retry launch response = %#v errors %#v", retry.Data.LaunchFlowPhase, retry.Errors)
+	}
+
+	var repeatedCancel struct {
+		Data struct {
+			CancelRuntimeJob struct {
+				Status string `json:"status"`
+			} `json:"cancelRuntimeJob"`
+		} `json:"data"`
+		Errors []any `json:"errors"`
+	}
+	postGraphQL(t, handler, `mutation($id: ID!) {
+		cancelRuntimeJob(id: $id) { status }
+	}`, map[string]any{"id": launch.Data.LaunchFlowPhase.Job.ID}, &repeatedCancel)
+	if len(repeatedCancel.Errors) != 0 || repeatedCancel.Data.CancelRuntimeJob.Status != string(runtimejobs.StatusCanceled) {
+		t.Fatalf("repeated cancel response = %#v errors %#v", repeatedCancel.Data.CancelRuntimeJob, repeatedCancel.Errors)
+	}
+	updated, err = store.Read(record.FlowID)
+	if err != nil {
+		t.Fatalf("Read after repeated cancel: %v", err)
+	}
+	if phase := phaseByIDForTest(updated, "implementation"); phase.Status != flowstore.PhaseRunning {
+		t.Fatalf("repeated old-job cancel changed phase to %q, want retry still running", phase.Status)
+	}
+}
+
+func TestHandlerGraphQLCancelRuntimeJobWithAttachedSessionDoesNotReportResetError(t *testing.T) {
+	store, _ := newFlowGraphQLStore(t)
+	record := createGraphQLFlow(t, store, flowstore.FlowRecord{
+		FlowID:       "cancel-attached-flow",
+		Title:        "Cancel Attached Flow",
+		Instructions: "cancel implementation after hook attach",
+		RepoPath:     t.TempDir(),
+		WorktreePath: t.TempDir(),
+	})
+	record = completeGraphQLPhase(t, store, record.FlowID, "plan", flowstore.PhaseUpdate{Status: flowstore.PhaseCompleted})
+	record = completeGraphQLPhase(t, store, record.FlowID, "plan-review", flowstore.PhaseUpdate{Status: flowstore.PhaseCompleted, Outcome: flowstore.OutcomeApproved})
+	registry := runtimejobs.NewRegistry(runtimejobs.Options{
+		BuildCommand: func(ctx context.Context, launch actions.AgentLaunchContext) (*exec.Cmd, error) {
+			return exec.CommandContext(ctx, "/bin/sh", "-c", "sleep 5"), nil
+		},
+		UpdatePhase: store.SetPhase,
+	})
+	defer registry.CancelAll()
+	handler := newFlowGraphQLHandlerWithOptions(t, server.HandlerOptions{
+		FlowStore:      store,
+		RuntimeJobs:    registry,
+		RuntimeStarter: registry,
+		AgentCommand:   "codex",
+		StateRoot:      t.TempDir(),
+	})
+
+	var launch struct {
+		Data struct {
+			LaunchFlowPhase struct {
+				LaunchID string `json:"launchId"`
+				Job      struct {
+					ID string `json:"id"`
+				} `json:"job"`
+			} `json:"launchFlowPhase"`
+		} `json:"data"`
+		Errors []any `json:"errors"`
+	}
+	postGraphQL(t, handler, `mutation($input: LaunchFlowPhaseInput!) {
+		launchFlowPhase(input: $input) { launchId job { id } }
+	}`, map[string]any{"input": map[string]any{"flowId": record.FlowID, "phaseId": "implementation"}}, &launch)
+	if len(launch.Errors) != 0 || launch.Data.LaunchFlowPhase.Job.ID == "" || launch.Data.LaunchFlowPhase.LaunchID == "" {
+		t.Fatalf("launch response = %#v errors %#v", launch.Data.LaunchFlowPhase, launch.Errors)
+	}
+	_, err := store.AttachSession(flowstore.SessionAttachUpdate{
+		FlowID:  record.FlowID,
+		PhaseID: "implementation",
+		Session: flowstore.Session{
+			Provider:  "codex",
+			SessionID: "session-1",
+			LaunchID:  launch.Data.LaunchFlowPhase.LaunchID,
+		},
+	})
+	if err != nil {
+		t.Fatalf("AttachSession() error = %v", err)
+	}
+
+	var cancel struct {
+		Data struct {
+			CancelRuntimeJob struct {
+				Status string `json:"status"`
+			} `json:"cancelRuntimeJob"`
+		} `json:"data"`
+		Errors []any `json:"errors"`
+	}
+	postGraphQL(t, handler, `mutation($id: ID!) {
+		cancelRuntimeJob(id: $id) { status }
+	}`, map[string]any{"id": launch.Data.LaunchFlowPhase.Job.ID}, &cancel)
+	if len(cancel.Errors) != 0 || cancel.Data.CancelRuntimeJob.Status != string(runtimejobs.StatusCanceled) {
+		t.Fatalf("cancel response = %#v errors %#v", cancel.Data.CancelRuntimeJob, cancel.Errors)
+	}
+	updated, err := store.Read(record.FlowID)
+	if err != nil {
+		t.Fatalf("Read after cancel: %v", err)
+	}
+	if phase := phaseByIDForTest(updated, "implementation"); phase.Status != flowstore.PhaseRunning || flowstore.PhaseAwaitingSession(phase) {
+		t.Fatalf("attached cancel phase = %#v, want running with attached session", phase)
+	}
+}
+
+func TestHandlerGraphQLCancelRuntimeJobAfterPhaseAdvancedSkipsReset(t *testing.T) {
+	store, _ := newFlowGraphQLStore(t)
+	record := createGraphQLFlow(t, store, flowstore.FlowRecord{
+		FlowID:       "cancel-advanced-flow",
+		Title:        "Cancel Advanced Flow",
+		Instructions: "cancel after agent updated phase",
+		RepoPath:     t.TempDir(),
+		WorktreePath: t.TempDir(),
+	})
+	record = completeGraphQLPhase(t, store, record.FlowID, "plan", flowstore.PhaseUpdate{Status: flowstore.PhaseCompleted})
+	record = completeGraphQLPhase(t, store, record.FlowID, "plan-review", flowstore.PhaseUpdate{Status: flowstore.PhaseCompleted, Outcome: flowstore.OutcomeApproved})
+	registry := runtimejobs.NewRegistry(runtimejobs.Options{
+		BuildCommand: func(ctx context.Context, launch actions.AgentLaunchContext) (*exec.Cmd, error) {
+			return exec.CommandContext(ctx, "/bin/sh", "-c", "sleep 5"), nil
+		},
+		UpdatePhase: store.SetPhase,
+	})
+	defer registry.CancelAll()
+	handler := newFlowGraphQLHandlerWithOptions(t, server.HandlerOptions{
+		FlowStore:      store,
+		RuntimeJobs:    registry,
+		RuntimeStarter: registry,
+		AgentCommand:   "codex",
+		StateRoot:      t.TempDir(),
+	})
+
+	var launch struct {
+		Data struct {
+			LaunchFlowPhase struct {
+				Job struct {
+					ID string `json:"id"`
+				} `json:"job"`
+			} `json:"launchFlowPhase"`
+		} `json:"data"`
+		Errors []any `json:"errors"`
+	}
+	postGraphQL(t, handler, `mutation($input: LaunchFlowPhaseInput!) {
+		launchFlowPhase(input: $input) { job { id } }
+	}`, map[string]any{"input": map[string]any{"flowId": record.FlowID, "phaseId": "implementation"}}, &launch)
+	if len(launch.Errors) != 0 || launch.Data.LaunchFlowPhase.Job.ID == "" {
+		t.Fatalf("launch response = %#v errors %#v", launch.Data.LaunchFlowPhase, launch.Errors)
+	}
+	record, err := store.SetPhase(flowstore.PhaseUpdate{
+		FlowID:  record.FlowID,
+		PhaseID: "implementation",
+		Status:  flowstore.PhaseCompleted,
+		Summary: "Agent finished before cancel.",
+	})
+	if err != nil {
+		t.Fatalf("SetPhase(implementation completed) error = %v", err)
+	}
+
+	var cancel struct {
+		Data struct {
+			CancelRuntimeJob struct {
+				Status string `json:"status"`
+			} `json:"cancelRuntimeJob"`
+		} `json:"data"`
+		Errors []any `json:"errors"`
+	}
+	postGraphQL(t, handler, `mutation($id: ID!) {
+		cancelRuntimeJob(id: $id) { status }
+	}`, map[string]any{"id": launch.Data.LaunchFlowPhase.Job.ID}, &cancel)
+	if len(cancel.Errors) != 0 || cancel.Data.CancelRuntimeJob.Status != string(runtimejobs.StatusCanceled) {
+		t.Fatalf("cancel response = %#v errors %#v", cancel.Data.CancelRuntimeJob, cancel.Errors)
+	}
+	updated, err := store.Read(record.FlowID)
+	if err != nil {
+		t.Fatalf("Read after cancel: %v", err)
+	}
+	if phase := phaseByIDForTest(updated, "implementation"); phase.Status != flowstore.PhaseCompleted || phase.Summary != "Agent finished before cancel." {
+		t.Fatalf("implementation after cancel = %#v, want completed state preserved", phase)
+	}
+}
+
+func TestHandlerGraphQLLaunchFlowPhaseRejectsCodexAppAndNonLaunchablePhase(t *testing.T) {
+	store, _ := newFlowGraphQLStore(t)
+	record := createGraphQLFlow(t, store, flowstore.FlowRecord{
+		FlowID:       "reject-flow",
+		Title:        "Reject Flow",
+		Instructions: "reject launch",
+		RepoPath:     t.TempDir(),
+	})
+	handler := newFlowGraphQLHandlerWithOptions(t, server.HandlerOptions{
+		FlowStore:    store,
+		AgentCommand: "codex",
+	})
+
+	var codexApp struct {
+		Data   any   `json:"data"`
+		Errors []any `json:"errors"`
+	}
+	postGraphQL(t, handler, `mutation($input: LaunchFlowPhaseInput!) {
+		launchFlowPhase(input: $input) { launchId }
+	}`, map[string]any{"input": map[string]any{
+		"flowId":       record.FlowID,
+		"phaseId":      "plan",
+		"agentCommand": "codex-app",
+	}}, &codexApp)
+	if len(codexApp.Errors) == 0 {
+		t.Fatalf("codex-app launch response had no errors: %#v", codexApp)
+	}
+
+	var pending struct {
+		Data   any   `json:"data"`
+		Errors []any `json:"errors"`
+	}
+	postGraphQL(t, handler, `mutation($input: LaunchFlowPhaseInput!) {
+		launchFlowPhase(input: $input) { launchId }
+	}`, map[string]any{"input": map[string]any{
+		"flowId":  record.FlowID,
+		"phaseId": "implementation",
+	}}, &pending)
+	if len(pending.Errors) == 0 {
+		t.Fatalf("pending implementation launch response had no errors: %#v", pending)
+	}
+}
+
 func newFlowGraphQLStore(t *testing.T) (*flowstore.Store, string) {
 	t.Helper()
 	root := t.TempDir()
@@ -1051,31 +1401,28 @@ func newFlowGraphQLStore(t *testing.T) (*flowstore.Store, string) {
 	return store, root
 }
 
-func newFlowGraphQLHandler(t *testing.T, store server.FlowStore) http.Handler {
+func newFlowGraphQLHandler(t *testing.T, reader server.FlowStore) http.Handler {
 	t.Helper()
-	return newFlowGraphQLHandlerWithRuntimeAndCreator(t, store, nil, nil)
+	return newFlowGraphQLHandlerWithRuntime(t, reader, nil)
 }
 
-func newFlowGraphQLHandlerWithRuntime(t *testing.T, store server.FlowStore, runtimeJobs flowquery.RuntimeJobLookup) http.Handler {
+func newFlowGraphQLHandlerWithRuntime(t *testing.T, reader server.FlowStore, runtimeJobs flowquery.RuntimeJobLookup) http.Handler {
 	t.Helper()
-	return newFlowGraphQLHandlerWithRuntimeAndCreator(t, store, runtimeJobs, nil)
-}
-
-func newFlowGraphQLHandlerWithCreator(t *testing.T, store server.FlowStore, creator server.FlowCreator) http.Handler {
-	t.Helper()
-	return newFlowGraphQLHandlerWithRuntimeAndCreator(t, store, nil, creator)
-}
-
-func newFlowGraphQLHandlerWithRuntimeAndCreator(t *testing.T, store server.FlowStore, runtimeJobs flowquery.RuntimeJobLookup, creator server.FlowCreator) http.Handler {
-	t.Helper()
-	handler, err := server.NewHandler(server.HandlerOptions{
+	return newFlowGraphQLHandlerWithOptions(t, server.HandlerOptions{
 		Token:        "test-token",
 		ListenerHost: "127.0.0.1",
 		ListenerPort: "4321",
-		FlowStore:    store,
-		FlowCreator:  creator,
+		FlowStore:    reader,
 		RuntimeJobs:  runtimeJobs,
 	})
+}
+
+func newFlowGraphQLHandlerWithOptions(t *testing.T, opts server.HandlerOptions) http.Handler {
+	t.Helper()
+	opts.Token = "test-token"
+	opts.ListenerHost = "127.0.0.1"
+	opts.ListenerPort = "4321"
+	handler, err := server.NewHandler(opts)
 	if err != nil {
 		t.Fatalf("NewHandler: %v", err)
 	}
@@ -1084,6 +1431,16 @@ func newFlowGraphQLHandlerWithRuntimeAndCreator(t *testing.T, store server.FlowS
 
 type staticRuntimeJobLookup struct {
 	job *flowquery.RuntimeJob
+}
+
+type staticFlowCreator struct {
+	input  graph.CreateFlowInput
+	record flowstore.FlowRecord
+}
+
+func (c *staticFlowCreator) CreateFlow(_ context.Context, input graph.CreateFlowInput) (flowstore.FlowRecord, error) {
+	c.input = input
+	return c.record, nil
 }
 
 func (lookup staticRuntimeJobLookup) RuntimeStateKnown() bool {
@@ -1105,6 +1462,26 @@ func (failingRuntimeJobLookup) RuntimeStateKnown() bool {
 
 func (failingRuntimeJobLookup) ActiveRuntimeJob(flowstore.FlowRecord, flowstore.FlowPhase) (*flowquery.RuntimeJob, error) {
 	return nil, errors.New("runtime lookup failed")
+}
+
+type startErrorRuntimeProvider struct {
+	err error
+}
+
+func (p *startErrorRuntimeProvider) RuntimeStateKnown() bool {
+	return true
+}
+
+func (p *startErrorRuntimeProvider) ActiveRuntimeJob(flowstore.FlowRecord, flowstore.FlowPhase) (*flowquery.RuntimeJob, error) {
+	return nil, nil
+}
+
+func (p *startErrorRuntimeProvider) Start(context.Context, runtimejobs.StartRequest) (runtimejobs.Snapshot, error) {
+	return runtimejobs.Snapshot{}, p.err
+}
+
+func (p *startErrorRuntimeProvider) Cancel(string) runtimejobs.CancelResult {
+	return runtimejobs.CancelResult{}
 }
 
 const setFlowPhaseStatusMutation = `mutation($input: SetFlowPhaseStatusInput!) {
@@ -1299,42 +1676,59 @@ func equalStrings(a, b []string) bool {
 	return true
 }
 
-func newGraphQLGitRepo(t *testing.T, name string) string {
+func completeGraphQLPhase(t *testing.T, store *flowstore.Store, flowID, phaseID string, update flowstore.PhaseUpdate) flowstore.FlowRecord {
 	t.Helper()
-	repoPath := filepath.Join(t.TempDir(), name)
-	if err := os.MkdirAll(repoPath, 0o755); err != nil {
-		t.Fatalf("mkdir repo: %v", err)
-	}
-	mustGit(t, repoPath, "init", "-b", "main")
-	mustGit(t, repoPath, "config", "user.email", "test@example.com")
-	mustGit(t, repoPath, "config", "user.name", "Test User")
-	if err := os.WriteFile(filepath.Join(repoPath, "README.md"), []byte("# Test\n"), 0o644); err != nil {
-		t.Fatalf("write README: %v", err)
-	}
-	mustGit(t, repoPath, "add", "README.md")
-	mustGit(t, repoPath, "commit", "-m", "initial commit")
-	return repoPath
-}
-
-func mustGit(t *testing.T, dir string, args ...string) {
-	t.Helper()
-	_ = mustGitOutput(t, dir, args...)
-}
-
-func mustGitOutput(t *testing.T, dir string, args ...string) string {
-	t.Helper()
-	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
-	out, err := cmd.CombinedOutput()
+	update.FlowID = flowID
+	update.PhaseID = phaseID
+	record, err := store.SetPhase(update)
 	if err != nil {
-		t.Fatalf("git %v failed: %v\n%s", args, err, string(out))
+		t.Fatalf("SetPhase(%s): %v", phaseID, err)
 	}
-	return string(out)
+	return record
 }
 
-type errGraphQLBranchExists struct{}
+func phaseByIDForTest(record flowstore.FlowRecord, phaseID string) flowstore.FlowPhase {
+	for _, phase := range record.Phases {
+		if phase.PhaseID == phaseID {
+			return phase
+		}
+	}
+	return flowstore.FlowPhase{}
+}
 
-func (errGraphQLBranchExists) Error() string { return "branch exists" }
+func waitForRuntimeJobStatus(t *testing.T, registry *runtimejobs.Registry, id string, status runtimejobs.Status) runtimejobs.Snapshot {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		snapshot, ok := registry.Lookup(id)
+		if ok && snapshot.Status == status {
+			return snapshot
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	snapshot, _ := registry.Lookup(id)
+	t.Fatalf("job %s did not reach %s; latest = %#v", id, status, snapshot)
+	return runtimejobs.Snapshot{}
+}
 
-type errGraphQLBootstrap struct{}
-
-func (errGraphQLBootstrap) Error() string { return "missing env file" }
+func activeRuntimeJobForTest(phases []struct {
+	PhaseID          string `json:"phaseId"`
+	ActiveRuntimeJob *struct {
+		ID       string `json:"id"`
+		LaunchID string `json:"launchId"`
+		Status   string `json:"status"`
+		LogTail  string `json:"logTail"`
+	} `json:"activeRuntimeJob"`
+}, phaseID string) *struct {
+	ID       string `json:"id"`
+	LaunchID string `json:"launchId"`
+	Status   string `json:"status"`
+	LogTail  string `json:"logTail"`
+} {
+	for _, phase := range phases {
+		if phase.PhaseID == phaseID {
+			return phase.ActiveRuntimeJob
+		}
+	}
+	return nil
+}

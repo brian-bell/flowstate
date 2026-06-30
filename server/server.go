@@ -15,6 +15,7 @@ import (
 	"net/netip"
 	"net/url"
 	"path"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -22,11 +23,13 @@ import (
 	"github.com/99designs/gqlgen/graphql/handler"
 	"github.com/99designs/gqlgen/graphql/handler/transport"
 	"github.com/brian-bell/flowstate/actions"
+	"github.com/brian-bell/flowstate/flowlaunch"
 	"github.com/brian-bell/flowstate/flowstore"
 	"github.com/brian-bell/flowstate/server/flowcreate"
 	"github.com/brian-bell/flowstate/server/flowquery"
 	"github.com/brian-bell/flowstate/server/graph"
 	"github.com/brian-bell/flowstate/server/graph/generated"
+	"github.com/brian-bell/flowstate/server/runtimejobs"
 	"github.com/brian-bell/flowstate/server/webassets"
 )
 
@@ -36,39 +39,83 @@ var schemaGraphQL string
 const DefaultSPAShell = "_shell.html"
 
 type HandlerOptions struct {
-	Token          string
-	ListenerHost   string
-	ListenerPort   string
-	Scope          ListenerScope
-	AllowIPv6Alias bool
-	FlowStore      FlowStore
-	FlowCreator    FlowCreator
-	RuntimeJobs    flowquery.RuntimeJobLookup
-	StaticAssets   fs.FS
-	SPAShell       string
+	Token                 string
+	ListenerHost          string
+	ListenerPort          string
+	Scope                 ListenerScope
+	AllowIPv6Alias        bool
+	FlowReader            FlowReader
+	FlowStore             FlowStore
+	FlowCreator           graph.FlowCreator
+	RuntimeJobs           flowquery.RuntimeJobLookup
+	RuntimeStarter        graph.RuntimeStarter
+	RuntimeController     graph.RuntimeController
+	AgentCommand          string
+	CodexReasoningEffort  string
+	ClaudeReasoningEffort string
+	FlowPromptTemplates   flowlaunch.PromptTemplates
+	StateRoot             string
+	StaticAssets          fs.FS
+	SPAShell              string
 }
 
 type Options struct {
-	Listen               string
-	Token                string
-	StateRoot            string
-	RuntimeJobs          flowquery.RuntimeJobLookup
-	BootstrapHookForRepo func(string) (actions.BootstrapHook, bool)
-	RunBootstrapHook     func(actions.BootstrapContext, actions.BootstrapHook) error
-	Stdout               io.Writer
-	Started              chan<- Started
+	Listen                string
+	Token                 string
+	StateRoot             string
+	RuntimeJobs           flowquery.RuntimeJobLookup
+	RuntimeStarter        graph.RuntimeStarter
+	RuntimeController     graph.RuntimeController
+	AgentCommand          string
+	CodexReasoningEffort  string
+	ClaudeReasoningEffort string
+	FlowPromptTemplates   flowlaunch.PromptTemplates
+	BootstrapHookForRepo  func(string) (actions.BootstrapHook, bool)
+	RunBootstrapHook      func(actions.BootstrapContext, actions.BootstrapHook) error
+	Stdout                io.Writer
+	Started               chan<- Started
 
 	resolve ListenResolveOptions
 	listen  func(network string, address string) (net.Listener, error)
 }
 
-type FlowStore interface {
+type FlowReader interface {
 	List(flowstore.FlowFilter) ([]flowstore.FlowRecord, error)
 	Read(string) (flowstore.FlowRecord, error)
+}
+
+type FlowStore interface {
+	FlowReader
+	Create(flowstore.FlowRecord) (flowstore.FlowRecord, error)
+	SetStartMetadata(flowstore.StartMetadataUpdate) (flowstore.FlowRecord, error)
+	AddPhaseLaunchID(flowstore.PhaseLaunchUpdate) (flowstore.FlowRecord, error)
+	ResetAwaitingSessionPhase(flowstore.PhaseResetUpdate) (flowstore.FlowRecord, error)
 	SetPhase(flowstore.PhaseUpdate) (flowstore.FlowRecord, error)
 }
 
-type FlowCreator = graph.FlowCreator
+type readOnlyFlowStore struct {
+	FlowReader
+}
+
+func (s readOnlyFlowStore) AddPhaseLaunchID(flowstore.PhaseLaunchUpdate) (flowstore.FlowRecord, error) {
+	return flowstore.FlowRecord{}, fmt.Errorf("flow store is read-only")
+}
+
+func (s readOnlyFlowStore) Create(flowstore.FlowRecord) (flowstore.FlowRecord, error) {
+	return flowstore.FlowRecord{}, fmt.Errorf("flow store is read-only")
+}
+
+func (s readOnlyFlowStore) SetStartMetadata(flowstore.StartMetadataUpdate) (flowstore.FlowRecord, error) {
+	return flowstore.FlowRecord{}, fmt.Errorf("flow store is read-only")
+}
+
+func (s readOnlyFlowStore) ResetAwaitingSessionPhase(flowstore.PhaseResetUpdate) (flowstore.FlowRecord, error) {
+	return flowstore.FlowRecord{}, fmt.Errorf("flow store is read-only")
+}
+
+func (s readOnlyFlowStore) SetPhase(flowstore.PhaseUpdate) (flowstore.FlowRecord, error) {
+	return flowstore.FlowRecord{}, fmt.Errorf("flow store is read-only")
+}
 
 type Started struct {
 	URL   string
@@ -92,11 +139,31 @@ func Run(ctx context.Context, opts Options) error {
 	if err != nil {
 		return err
 	}
-	flowCreator := flowcreate.New(flowcreate.Options{
-		Store:                flowStore,
-		BootstrapHookForRepo: opts.BootstrapHookForRepo,
-		RunBootstrapHook:     opts.RunBootstrapHook,
-	})
+	runtimeJobs := opts.RuntimeJobs
+	runtimeStarter := opts.RuntimeStarter
+	runtimeController := opts.RuntimeController
+	var ownedRegistry *runtimejobs.Registry
+	if runtimeJobs == nil && runtimeStarter == nil && runtimeController == nil {
+		registry := runtimejobs.NewRegistry(runtimejobs.Options{
+			ReadFlow:    flowStore.Read,
+			ResetPhase:  flowStore.ResetAwaitingSessionPhase,
+			UpdatePhase: flowStore.SetPhase,
+		})
+		ownedRegistry = registry
+		runtimeJobs = registry
+		runtimeStarter = registry
+		runtimeController = registry
+	} else {
+		runtimeJobs, runtimeStarter, runtimeController, err = resolveRuntimeOptions(runtimeJobs, runtimeStarter, runtimeController)
+		if err != nil {
+			return err
+		}
+	}
+	defer func() {
+		if ownedRegistry != nil {
+			ownedRegistry.CancelAll()
+		}
+	}()
 
 	listen := net.Listen
 	if opts.listen != nil {
@@ -119,8 +186,19 @@ func Run(ctx context.Context, opts Options) error {
 		Scope:          resolvedListen.Scope,
 		AllowIPv6Alias: resolvedListen.Scope == ListenerScopeLoopback && listenerHost == "::1",
 		FlowStore:      flowStore,
-		FlowCreator:    flowCreator,
-		RuntimeJobs:    opts.RuntimeJobs,
+		FlowCreator: flowcreate.New(flowcreate.Options{
+			Store:                flowStore,
+			BootstrapHookForRepo: opts.BootstrapHookForRepo,
+			RunBootstrapHook:     opts.RunBootstrapHook,
+		}),
+		RuntimeJobs:           runtimeJobs,
+		RuntimeStarter:        runtimeStarter,
+		RuntimeController:     runtimeController,
+		AgentCommand:          opts.AgentCommand,
+		CodexReasoningEffort:  opts.CodexReasoningEffort,
+		ClaudeReasoningEffort: opts.ClaudeReasoningEffort,
+		FlowPromptTemplates:   opts.FlowPromptTemplates,
+		StateRoot:             opts.StateRoot,
 	})
 	if err != nil {
 		return err
@@ -191,10 +269,45 @@ func NewHandler(opts HandlerOptions) (http.Handler, error) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(schemaGraphQL))
 	})
+	flowStore := opts.FlowStore
+	if flowStore == nil && opts.FlowReader != nil {
+		flowStore = readOnlyFlowStore{FlowReader: opts.FlowReader}
+	}
+	flowCreator := opts.FlowCreator
+	if flowCreator == nil && flowStore != nil {
+		flowCreator = flowcreate.New(flowcreate.Options{Store: flowStore})
+	}
+	runtimeJobs := opts.RuntimeJobs
+	runtimeStarter := opts.RuntimeStarter
+	runtimeController := opts.RuntimeController
+	if runtimeJobs == nil && runtimeStarter == nil && runtimeController == nil {
+		registryOpts := runtimejobs.Options{}
+		if flowStore != nil {
+			registryOpts.ReadFlow = flowStore.Read
+			registryOpts.ResetPhase = flowStore.ResetAwaitingSessionPhase
+			registryOpts.UpdatePhase = flowStore.SetPhase
+		}
+		registry := runtimejobs.NewRegistry(registryOpts)
+		runtimeJobs = registry
+		runtimeStarter = registry
+		runtimeController = registry
+	} else {
+		runtimeJobs, runtimeStarter, runtimeController, err = resolveRuntimeOptions(runtimeJobs, runtimeStarter, runtimeController)
+		if err != nil {
+			return nil, err
+		}
+	}
 	graphqlHandler := handler.New(generated.NewExecutableSchema(generated.Config{Resolvers: &graph.Resolver{
-		FlowStore:   opts.FlowStore,
-		FlowCreator: opts.FlowCreator,
-		RuntimeJobs: opts.RuntimeJobs,
+		FlowStore:             flowStore,
+		FlowCreator:           flowCreator,
+		RuntimeJobs:           runtimeJobs,
+		RuntimeStarter:        runtimeStarter,
+		RuntimeController:     runtimeController,
+		AgentCommand:          opts.AgentCommand,
+		CodexReasoningEffort:  opts.CodexReasoningEffort,
+		ClaudeReasoningEffort: opts.ClaudeReasoningEffort,
+		FlowPromptTemplates:   opts.FlowPromptTemplates,
+		StateRoot:             opts.StateRoot,
 	}}))
 	graphqlHandler.AddTransport(transport.POST{})
 	mux.Handle("/graphql", requireBearerToken(opts.Token, graphqlHandler))
@@ -222,6 +335,58 @@ func staticAssetOptions(opts HandlerOptions) (fs.FS, string, error) {
 		return nil, "", fmt.Errorf("SPA shell %q is a directory", spaShell)
 	}
 	return staticAssets, spaShell, nil
+}
+
+func resolveRuntimeOptions(runtimeJobs flowquery.RuntimeJobLookup, runtimeStarter graph.RuntimeStarter, runtimeController graph.RuntimeController) (flowquery.RuntimeJobLookup, graph.RuntimeStarter, graph.RuntimeController, error) {
+	if runtimeStarter == nil && runtimeController == nil {
+		return runtimeJobs, nil, nil, nil
+	}
+	provider, ok := singleRuntimeProvider(runtimeJobs, runtimeStarter, runtimeController)
+	if !ok {
+		return nil, nil, nil, fmt.Errorf("runtime job options must use one provider for lookup, starter, and controller")
+	}
+	if runtimeJobs == nil {
+		runtimeJobs, _ = provider.(flowquery.RuntimeJobLookup)
+	}
+	if runtimeStarter == nil {
+		runtimeStarter, _ = provider.(graph.RuntimeStarter)
+	}
+	if runtimeController == nil {
+		runtimeController, _ = provider.(graph.RuntimeController)
+	}
+	if runtimeJobs == nil || runtimeStarter == nil || runtimeController == nil {
+		return nil, nil, nil, fmt.Errorf("runtime job options must provide lookup, starter, and controller together")
+	}
+	return runtimeJobs, runtimeStarter, runtimeController, nil
+}
+
+func singleRuntimeProvider(values ...any) (any, bool) {
+	var provider any
+	for _, value := range values {
+		if value == nil {
+			continue
+		}
+		if provider == nil {
+			provider = value
+			continue
+		}
+		if !sameRuntimeProvider(provider, value) {
+			return nil, false
+		}
+	}
+	return provider, provider != nil
+}
+
+func sameRuntimeProvider(a, b any) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	va := reflect.ValueOf(a)
+	vb := reflect.ValueOf(b)
+	if !va.IsValid() || !vb.IsValid() || va.Type() != vb.Type() || !va.Type().Comparable() {
+		return false
+	}
+	return va.Interface() == vb.Interface()
 }
 
 func newStaticSPAHandler(staticAssets fs.FS, spaShell string) http.Handler {

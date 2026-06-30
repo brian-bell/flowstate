@@ -161,7 +161,17 @@ func TestRunServeLoadsConfigForStateRootButBypassesScanAndTUI(t *testing.T) {
 	configRoot := filepath.Join(t.TempDir(), "from-config")
 	err := run([]string{"wtui", "serve"}, runDeps{
 		loadConfig: func() (config.Config, error) {
-			return config.Config{Sessions: config.SessionsConfig{Root: configRoot}}, nil
+			return config.Config{
+				Sessions: config.SessionsConfig{Root: configRoot},
+				Agent: config.AgentConfig{
+					Command:               "codex",
+					CodexReasoningEffort:  "high",
+					ClaudeReasoningEffort: "max",
+				},
+				FlowPrompts: config.FlowPromptConfig{
+					Implementation: "custom implementation {flow_id}",
+				},
+			}, nil
 		},
 		scan: func(scanner.ScanOptions) ([]scanner.Repo, error) {
 			t.Fatal("scan should not run for serve")
@@ -189,6 +199,12 @@ func TestRunServeLoadsConfigForStateRootButBypassesScanAndTUI(t *testing.T) {
 	}
 	if got.StateRoot != configRoot {
 		t.Fatalf("serve state root = %q, want config root %q", got.StateRoot, configRoot)
+	}
+	if got.AgentCommand != "codex" || got.CodexReasoningEffort != "high" || got.ClaudeReasoningEffort != "max" {
+		t.Fatalf("serve agent defaults = command %q codex %q claude %q", got.AgentCommand, got.CodexReasoningEffort, got.ClaudeReasoningEffort)
+	}
+	if got.FlowPromptTemplates.Implementation != "custom implementation {flow_id}" {
+		t.Fatalf("serve implementation prompt = %q, want configured template", got.FlowPromptTemplates.Implementation)
 	}
 }
 

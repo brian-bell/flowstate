@@ -978,6 +978,82 @@ func TestStoreAddPhaseLaunchIDMarksPhaseRunning(t *testing.T) {
 	}
 }
 
+func TestStoreAddPhaseLaunchIDRejectRunningPreventsDuplicateFreshLaunch(t *testing.T) {
+	root := t.TempDir()
+	store, err := flowstore.NewStore(flowstore.StoreOptions{Root: root})
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+	record, err := store.Create(flowstore.FlowRecord{
+		Title:        "No duplicate launch",
+		Instructions: "Launch once",
+		RepoPath:     filepath.Join(root, "repo"),
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	_, err = store.AddPhaseLaunchID(flowstore.PhaseLaunchUpdate{
+		FlowID:   record.FlowID,
+		PhaseID:  "plan",
+		LaunchID: "launch-1",
+	})
+	if err != nil {
+		t.Fatalf("first AddPhaseLaunchID() error = %v", err)
+	}
+
+	_, err = store.AddPhaseLaunchID(flowstore.PhaseLaunchUpdate{
+		FlowID:        record.FlowID,
+		PhaseID:       "plan",
+		LaunchID:      "launch-2",
+		RejectRunning: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "already running") {
+		t.Fatalf("second AddPhaseLaunchID() error = %v, want already running", err)
+	}
+}
+
+func TestStoreAddPhaseLaunchIDRejectRunningRejectsStaleNonLaunchablePhase(t *testing.T) {
+	root := t.TempDir()
+	store, err := flowstore.NewStore(flowstore.StoreOptions{Root: root})
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+	record, err := store.Create(flowstore.FlowRecord{
+		Title:        "Reject stale launch",
+		Instructions: "Launch from fresh read only",
+		RepoPath:     filepath.Join(root, "repo"),
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	record, err = store.SetPhase(flowstore.PhaseUpdate{
+		FlowID:  record.FlowID,
+		PhaseID: "plan",
+		Status:  flowstore.PhaseCompleted,
+	})
+	if err != nil {
+		t.Fatalf("SetPhase(plan completed) error = %v", err)
+	}
+
+	_, err = store.AddPhaseLaunchID(flowstore.PhaseLaunchUpdate{
+		FlowID:        record.FlowID,
+		PhaseID:       "plan",
+		LaunchID:      "launch-stale",
+		RejectRunning: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), `phase "plan" is not launchable from status "completed"`) {
+		t.Fatalf("AddPhaseLaunchID(stale completed) error = %v, want not launchable", err)
+	}
+	read, err := store.Read(record.FlowID)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	phase := phaseByID(t, read, "plan")
+	if phase.Status != flowstore.PhaseCompleted || len(phase.LaunchIDs) != 0 {
+		t.Fatalf("plan phase after rejected launch = %#v, want completed without launch", phase)
+	}
+}
+
 func TestStoreResetAwaitingSessionPhaseReturnsRunningOrphanToReady(t *testing.T) {
 	root := t.TempDir()
 	store, err := flowstore.NewStore(flowstore.StoreOptions{Root: root})

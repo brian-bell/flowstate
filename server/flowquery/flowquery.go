@@ -2,9 +2,10 @@ package flowquery
 
 import (
 	"strings"
+	"time"
 
+	"github.com/brian-bell/flowstate/flowlaunch"
 	"github.com/brian-bell/flowstate/flowstore"
-	"github.com/brian-bell/flowstate/internal/artifacts"
 )
 
 type StaleRunningStatus string
@@ -16,9 +17,19 @@ const (
 )
 
 type RuntimeJob struct {
-	ID      string
-	PhaseID string
-	Status  string
+	ID               string
+	LaunchID         string
+	FlowID           string
+	PhaseID          string
+	Status           string
+	CreatedAt        time.Time
+	StartedAt        *time.Time
+	EndedAt          *time.Time
+	ExitCode         *int
+	Error            string
+	PhaseUpdateError string
+	LogTail          string
+	LogTruncated     bool
 }
 
 type RuntimeJobLookup interface {
@@ -92,13 +103,7 @@ func BuildPhaseWithRuntime(record flowstore.FlowRecord, phase flowstore.FlowPhas
 }
 
 func PhaseCanLaunch(record flowstore.FlowRecord, phase flowstore.FlowPhase) bool {
-	if phase.Status == flowstore.PhaseReady {
-		return true
-	}
-	return artifacts.NormalizePhaseID(phase.PhaseID) == "autoreview" &&
-		(phase.Status == flowstore.PhaseNeedsAttention || phase.Status == flowstore.PhaseBlocked) &&
-		flowstore.HasPRTarget(record.PR) &&
-		flowstore.PhasePredecessorsSatisfied(record, phase.PhaseID)
+	return flowlaunch.PhaseCanLaunch(record, phase)
 }
 
 func StaleRunningStatusForPhase(phase flowstore.FlowPhase) *StaleRunningStatus {

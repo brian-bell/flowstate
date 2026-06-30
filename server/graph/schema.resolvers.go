@@ -8,13 +8,18 @@ package graph
 import (
 	"context"
 	"fmt"
+	"os"
 	"slices"
+	"strings"
 
+	"github.com/brian-bell/flowstate/flowlaunch"
 	"github.com/brian-bell/flowstate/flowstore"
 	"github.com/brian-bell/flowstate/internal/artifacts"
+	"github.com/brian-bell/flowstate/planstore"
 	"github.com/brian-bell/flowstate/server/flowquery"
 	"github.com/brian-bell/flowstate/server/graph/generated"
 	"github.com/brian-bell/flowstate/server/graph/model"
+	"github.com/brian-bell/flowstate/server/runtimejobs"
 )
 
 // CreateFlow is the resolver for the createFlow field.
@@ -37,9 +42,139 @@ func (r *mutationResolver) CreateFlow(ctx context.Context, input model.CreateFlo
 	}
 	view, err := flowquery.BuildWithRuntime(record, r.RuntimeJobs)
 	if err != nil {
-		return nil, err
+		view = flowquery.Build(record)
 	}
 	return flowToGraphQL(view), nil
+}
+
+// LaunchFlowPhase is the resolver for the launchFlowPhase field.
+func (r *mutationResolver) LaunchFlowPhase(ctx context.Context, input model.LaunchFlowPhaseInput) (*model.LaunchFlowPhasePayload, error) {
+	if r.FlowStore == nil {
+		return nil, fmt.Errorf("flow store is not configured")
+	}
+	if r.RuntimeStarter == nil {
+		return nil, fmt.Errorf("runtime job starter is not configured")
+	}
+	record, err := r.FlowStore.Read(input.FlowID)
+	if err != nil {
+		return nil, err
+	}
+	phase, ok := flowlaunch.PhaseByID(record, input.PhaseID)
+	if !ok {
+		return nil, fmt.Errorf("phase %q not found in flow %q", input.PhaseID, input.FlowID)
+	}
+	if !flowlaunch.PhaseCanLaunch(record, phase) {
+		return nil, fmt.Errorf("phase %q is not launchable from status %q", phase.PhaseID, phase.Status)
+	}
+	command, err := r.launchAgentCommand(input)
+	if err != nil {
+		return nil, err
+	}
+	reasoningEffort, err := r.launchReasoningEffort(command, input)
+	if err != nil {
+		return nil, err
+	}
+	launcher := flowlaunch.Launcher{
+		PlanMarkdownPath: func(planID string) (string, error) {
+			return planstore.MarkdownPath(r.StateRoot, planID)
+		},
+		ReadPlan: func(planID string) (string, error) {
+			planPath := record.PlanPath
+			if strings.TrimSpace(planPath) == "" {
+				var err error
+				planPath, err = planstore.MarkdownPath(r.StateRoot, planID)
+				if err != nil {
+					return "", err
+				}
+			}
+			data, err := os.ReadFile(planPath)
+			if err != nil {
+				return "", err
+			}
+			return string(data), nil
+		},
+		AddPhaseLaunchID: r.FlowStore.AddPhaseLaunchID,
+		SessionStateRoot: r.StateRoot,
+		AgentCommand:     command,
+		ReasoningEffort:  reasoningEffort,
+		Templates:        r.FlowPromptTemplates,
+	}
+	prepared, err := launcher.Preflight(flowlaunch.Request{
+		Record:        record,
+		Phase:         phase,
+		Headless:      true,
+		RejectRunning: true,
+	})
+	if err != nil {
+		return nil, err
+	}
+	result, err := launcher.Prepare(prepared)
+	if err != nil {
+		return nil, err
+	}
+	launchContext := result.Context
+	launchContext.Embedded = false
+	launchContext.Headless = true
+	launchContext.FlowLaunchTracked = true
+	snapshot, err := r.RuntimeStarter.Start(ctx, runtimejobs.StartRequest{
+		FlowID:   record.FlowID,
+		PhaseID:  launchContext.FlowPhaseID,
+		LaunchID: launchContext.LaunchID,
+		Context:  launchContext,
+	})
+	if err != nil {
+		if _, updateErr := r.FlowStore.SetPhase(flowstore.PhaseUpdate{
+			FlowID:  record.FlowID,
+			PhaseID: launchContext.FlowPhaseID,
+			Status:  flowstore.PhaseNeedsAttention,
+			Outcome: launchStartFailureOutcome(launchContext.FlowPhaseID),
+			Notes:   "Runtime job failed to start: " + err.Error(),
+		}); updateErr != nil {
+			return nil, fmt.Errorf("runtime job failed to start: %w; additionally failed to mark phase needs_attention: %v", err, updateErr)
+		}
+		return nil, err
+	}
+	return &model.LaunchFlowPhasePayload{
+		FlowID:   record.FlowID,
+		PhaseID:  launchContext.FlowPhaseID,
+		LaunchID: launchContext.LaunchID,
+		Job:      runtimeJobSnapshotToGraphQL(snapshot),
+	}, nil
+}
+
+// CancelRuntimeJob is the resolver for the cancelRuntimeJob field.
+func (r *mutationResolver) CancelRuntimeJob(ctx context.Context, id string) (*model.RuntimeJob, error) {
+	if r.RuntimeController == nil {
+		return nil, fmt.Errorf("runtime job controller is not configured")
+	}
+	result := r.RuntimeController.Cancel(id)
+	if !result.Found {
+		return nil, fmt.Errorf("runtime job %q not found", id)
+	}
+	snapshot := result.Snapshot
+	if result.Transition && snapshot.Status == runtimejobs.StatusCanceled {
+		if r.FlowStore == nil {
+			return nil, fmt.Errorf("runtime job canceled but flow store is not configured")
+		}
+		record, err := r.FlowStore.Read(snapshot.FlowID)
+		if err != nil {
+			return nil, fmt.Errorf("runtime job canceled but flow read failed: %w", err)
+		}
+		phase, ok := flowlaunch.PhaseByID(record, snapshot.PhaseID)
+		if ok &&
+			phase.Status == flowstore.PhaseRunning &&
+			flowstore.LatestPhaseLaunchID(phase) == snapshot.LaunchID &&
+			flowstore.PhaseAwaitingSession(phase) &&
+			!flowstore.PhaseSessionLaunchMismatch(phase) {
+			if _, err := r.FlowStore.ResetAwaitingSessionPhase(flowstore.PhaseResetUpdate{
+				FlowID:  snapshot.FlowID,
+				PhaseID: snapshot.PhaseID,
+			}); err != nil {
+				return nil, fmt.Errorf("runtime job canceled but phase reset failed: %w", err)
+			}
+		}
+	}
+	return runtimeJobSnapshotToGraphQL(snapshot), nil
 }
 
 // SetFlowPhaseStatus is the resolver for the setFlowPhaseStatus field.

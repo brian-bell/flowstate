@@ -13,6 +13,8 @@ type Query {
 
 type Mutation {
   createFlow(input: CreateFlowInput!): Flow!
+  launchFlowPhase(input: LaunchFlowPhaseInput!): LaunchFlowPhasePayload!
+  cancelRuntimeJob(id: ID!): RuntimeJob!
   setFlowPhaseStatus(input: SetFlowPhaseStatusInput!): SetFlowPhaseStatusPayload!
 }
 
@@ -21,6 +23,20 @@ input CreateFlowInput {
   title: String!
   instructions: String!
   baseRef: String
+}
+
+input LaunchFlowPhaseInput {
+  flowId: ID!
+  phaseId: ID!
+  agentCommand: String
+  reasoningEffort: String
+}
+
+type LaunchFlowPhasePayload {
+  flowId: ID!
+  phaseId: ID!
+  launchId: ID!
+  job: RuntimeJob!
 }
 
 input SetFlowPhaseStatusInput {
@@ -130,6 +146,16 @@ type Merge {
 
 type RuntimeJob {
   id: ID!
+  launchId: ID!
+  flowId: ID!
   phaseId: ID!
   status: String!
+  createdAt: Time!
+  startedAt: Time
+  endedAt: Time
+  exitCode: Int
+  error: String!
+  phaseUpdateError: String!
+  logTail: String!
+  logTruncated: Boolean!
 }
