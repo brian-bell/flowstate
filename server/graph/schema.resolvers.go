@@ -22,6 +22,31 @@ import (
 	"github.com/brian-bell/flowstate/server/runtimejobs"
 )
 
+// CreateFlow is the resolver for the createFlow field.
+func (r *mutationResolver) CreateFlow(ctx context.Context, input model.CreateFlowInput) (*model.Flow, error) {
+	if r.FlowCreator == nil {
+		return nil, fmt.Errorf("flow creator is not configured")
+	}
+	baseRef := ""
+	if input.BaseRef != nil {
+		baseRef = *input.BaseRef
+	}
+	record, err := r.FlowCreator.CreateFlow(ctx, CreateFlowInput{
+		RepoPath:     input.RepoPath,
+		Title:        input.Title,
+		Instructions: input.Instructions,
+		BaseRef:      baseRef,
+	})
+	if err != nil {
+		return nil, err
+	}
+	view, err := flowquery.BuildWithRuntime(record, r.RuntimeJobs)
+	if err != nil {
+		return nil, err
+	}
+	return flowToGraphQL(view), nil
+}
+
 // LaunchFlowPhase is the resolver for the launchFlowPhase field.
 func (r *mutationResolver) LaunchFlowPhase(ctx context.Context, input model.LaunchFlowPhaseInput) (*model.LaunchFlowPhasePayload, error) {
 	if r.FlowStore == nil {
@@ -115,13 +140,6 @@ func (r *mutationResolver) LaunchFlowPhase(ctx context.Context, input model.Laun
 		LaunchID: launchContext.LaunchID,
 		Job:      runtimeJobSnapshotToGraphQL(snapshot),
 	}, nil
-}
-
-func launchStartFailureOutcome(phaseID string) string {
-	if artifacts.NormalizePhaseID(phaseID) == "plan-review" {
-		return flowstore.OutcomeChangesRequested
-	}
-	return "runtime_start_failed"
 }
 
 // CancelRuntimeJob is the resolver for the cancelRuntimeJob field.

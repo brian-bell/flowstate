@@ -4,6 +4,8 @@ import (
 	"fmt"
 
 	"github.com/brian-bell/flowstate/agent"
+	"github.com/brian-bell/flowstate/flowstore"
+	"github.com/brian-bell/flowstate/internal/artifacts"
 	"github.com/brian-bell/flowstate/server/graph/model"
 )
 
@@ -42,4 +44,11 @@ func (r *mutationResolver) launchReasoningEffort(command string, input model.Lau
 		return "", err
 	}
 	return effort, nil
+}
+
+func launchStartFailureOutcome(phaseID string) string {
+	if artifacts.NormalizePhaseID(phaseID) == "plan-review" {
+		return flowstore.OutcomeChangesRequested
+	}
+	return "runtime_start_failed"
 }

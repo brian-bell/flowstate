@@ -244,12 +244,18 @@ func (r *Registry) CancelAll() {
 func (r *Registry) ActiveRuntimeJob(record flowstore.FlowRecord, phase flowstore.FlowPhase) (*flowquery.RuntimeJob, error) {
 	r.EvictExpired()
 	phaseID := artifacts.NormalizePhaseID(phase.PhaseID)
+	launchID := flowstore.LatestPhaseLaunchID(phase)
+	if launchID == "" {
+		return nil, nil
+	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	var latest *Snapshot
 	for _, j := range r.jobs {
 		snapshot := j.snapshot
-		if snapshot.FlowID != record.FlowID || artifacts.NormalizePhaseID(snapshot.PhaseID) != phaseID {
+		if snapshot.FlowID != record.FlowID ||
+			artifacts.NormalizePhaseID(snapshot.PhaseID) != phaseID ||
+			snapshot.LaunchID != launchID {
 			continue
 		}
 		if latest == nil || snapshot.CreatedAt.After(latest.CreatedAt) {

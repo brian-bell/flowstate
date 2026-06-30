@@ -20,6 +20,7 @@ import (
 	"github.com/brian-bell/flowstate/planstore"
 	"github.com/brian-bell/flowstate/server"
 	"github.com/brian-bell/flowstate/server/flowquery"
+	"github.com/brian-bell/flowstate/server/graph"
 	"github.com/brian-bell/flowstate/server/runtimejobs"
 )
 
@@ -127,6 +128,57 @@ func TestHandlerGraphQLListsFlowsWithFilteringAndComputedFields(t *testing.T) {
 	}
 	if got := flowIDs(filtered.Data.Flows); !equalStrings(got, []string{"blocked-flow"}) {
 		t.Fatalf("filtered flow IDs = %#v, want blocked-flow", got)
+	}
+}
+
+func TestHandlerGraphQLCreateFlowMutationIsAvailable(t *testing.T) {
+	store, _ := newFlowGraphQLStore(t)
+	creator := &staticFlowCreator{
+		record: flowstore.FlowRecord{
+			FlowID:       "created-flow",
+			Title:        "Created Flow",
+			Instructions: "create through graphql",
+			RepoPath:     "/dev/alpha",
+			BaseRef:      "main",
+			Phases:       []flowstore.FlowPhase{{PhaseID: "plan", Title: "Plan", Status: flowstore.PhaseReady}},
+		},
+	}
+	handler := newFlowGraphQLHandlerWithOptions(t, server.HandlerOptions{
+		FlowStore:   store,
+		FlowCreator: creator,
+	})
+
+	var out struct {
+		Data struct {
+			CreateFlow struct {
+				ID       string `json:"id"`
+				Title    string `json:"title"`
+				BaseRef  string `json:"baseRef"`
+				RepoPath string `json:"repoPath"`
+				Phases   []struct {
+					PhaseID string `json:"phaseId"`
+				} `json:"phases"`
+			} `json:"createFlow"`
+		} `json:"data"`
+		Errors []any `json:"errors"`
+	}
+	postGraphQL(t, handler, `mutation($input: CreateFlowInput!) {
+		createFlow(input: $input) { id title baseRef repoPath phases { phaseId } }
+	}`, map[string]any{"input": map[string]any{
+		"repoPath":     "/dev/alpha",
+		"title":        "Created Flow",
+		"instructions": "create through graphql",
+		"baseRef":      "main",
+	}}, &out)
+	if len(out.Errors) != 0 {
+		t.Fatalf("GraphQL errors: %#v", out.Errors)
+	}
+	if creator.input.RepoPath != "/dev/alpha" ||
+		out.Data.CreateFlow.ID != "created-flow" ||
+		out.Data.CreateFlow.BaseRef != "main" ||
+		len(out.Data.CreateFlow.Phases) != 1 ||
+		out.Data.CreateFlow.Phases[0].PhaseID != "plan" {
+		t.Fatalf("createFlow response = %#v input = %#v", out.Data.CreateFlow, creator.input)
 	}
 }
 
@@ -1330,6 +1382,16 @@ func newFlowGraphQLHandlerWithOptions(t *testing.T, opts server.HandlerOptions) 
 
 type staticRuntimeJobLookup struct {
 	job *flowquery.RuntimeJob
+}
+
+type staticFlowCreator struct {
+	input  graph.CreateFlowInput
+	record flowstore.FlowRecord
+}
+
+func (c *staticFlowCreator) CreateFlow(_ context.Context, input graph.CreateFlowInput) (flowstore.FlowRecord, error) {
+	c.input = input
+	return c.record, nil
 }
 
 func (lookup staticRuntimeJobLookup) RuntimeStateKnown() bool {

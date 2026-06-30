@@ -19,6 +19,17 @@ type FlowStore interface {
 	SetPhase(flowstore.PhaseUpdate) (flowstore.FlowRecord, error)
 }
 
+type CreateFlowInput struct {
+	RepoPath     string
+	Title        string
+	Instructions string
+	BaseRef      string
+}
+
+type FlowCreator interface {
+	CreateFlow(context.Context, CreateFlowInput) (flowstore.FlowRecord, error)
+}
+
 type RuntimeStarter interface {
 	Start(context.Context, runtimejobs.StartRequest) (runtimejobs.Snapshot, error)
 }
@@ -29,6 +40,7 @@ type RuntimeController interface {
 
 type Resolver struct {
 	FlowStore             FlowStore
+	FlowCreator           FlowCreator
 	RuntimeJobs           flowquery.RuntimeJobLookup
 	RuntimeStarter        RuntimeStarter
 	RuntimeController     RuntimeController

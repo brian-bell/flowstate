@@ -24,6 +24,7 @@ import (
 	"github.com/99designs/gqlgen/graphql/handler/transport"
 	"github.com/brian-bell/flowstate/flowlaunch"
 	"github.com/brian-bell/flowstate/flowstore"
+	"github.com/brian-bell/flowstate/server/flowcreate"
 	"github.com/brian-bell/flowstate/server/flowquery"
 	"github.com/brian-bell/flowstate/server/graph"
 	"github.com/brian-bell/flowstate/server/graph/generated"
@@ -44,6 +45,7 @@ type HandlerOptions struct {
 	AllowIPv6Alias        bool
 	FlowReader            FlowReader
 	FlowStore             FlowStore
+	FlowCreator           graph.FlowCreator
 	RuntimeJobs           flowquery.RuntimeJobLookup
 	RuntimeStarter        graph.RuntimeStarter
 	RuntimeController     graph.RuntimeController
@@ -81,6 +83,8 @@ type FlowReader interface {
 
 type FlowStore interface {
 	FlowReader
+	Create(flowstore.FlowRecord) (flowstore.FlowRecord, error)
+	SetStartMetadata(flowstore.StartMetadataUpdate) (flowstore.FlowRecord, error)
 	AddPhaseLaunchID(flowstore.PhaseLaunchUpdate) (flowstore.FlowRecord, error)
 	ResetAwaitingSessionPhase(flowstore.PhaseResetUpdate) (flowstore.FlowRecord, error)
 	SetPhase(flowstore.PhaseUpdate) (flowstore.FlowRecord, error)
@@ -91,6 +95,14 @@ type readOnlyFlowStore struct {
 }
 
 func (s readOnlyFlowStore) AddPhaseLaunchID(flowstore.PhaseLaunchUpdate) (flowstore.FlowRecord, error) {
+	return flowstore.FlowRecord{}, fmt.Errorf("flow store is read-only")
+}
+
+func (s readOnlyFlowStore) Create(flowstore.FlowRecord) (flowstore.FlowRecord, error) {
+	return flowstore.FlowRecord{}, fmt.Errorf("flow store is read-only")
+}
+
+func (s readOnlyFlowStore) SetStartMetadata(flowstore.StartMetadataUpdate) (flowstore.FlowRecord, error) {
 	return flowstore.FlowRecord{}, fmt.Errorf("flow store is read-only")
 }
 
@@ -166,6 +178,7 @@ func Run(ctx context.Context, opts Options) error {
 		Scope:                 resolvedListen.Scope,
 		AllowIPv6Alias:        resolvedListen.Scope == ListenerScopeLoopback && listenerHost == "::1",
 		FlowStore:             flowStore,
+		FlowCreator:           flowcreate.New(flowcreate.Options{Store: flowStore}),
 		RuntimeJobs:           runtimeJobs,
 		RuntimeStarter:        runtimeStarter,
 		RuntimeController:     runtimeController,
@@ -251,6 +264,10 @@ func NewHandler(opts HandlerOptions) (http.Handler, error) {
 	if flowStore == nil && opts.FlowReader != nil {
 		flowStore = readOnlyFlowStore{FlowReader: opts.FlowReader}
 	}
+	flowCreator := opts.FlowCreator
+	if flowCreator == nil && flowStore != nil {
+		flowCreator = flowcreate.New(flowcreate.Options{Store: flowStore})
+	}
 	runtimeJobs := opts.RuntimeJobs
 	runtimeStarter := opts.RuntimeStarter
 	runtimeController := opts.RuntimeController
@@ -273,6 +290,7 @@ func NewHandler(opts HandlerOptions) (http.Handler, error) {
 	}
 	graphqlHandler := handler.New(generated.NewExecutableSchema(generated.Config{Resolvers: &graph.Resolver{
 		FlowStore:             flowStore,
+		FlowCreator:           flowCreator,
 		RuntimeJobs:           runtimeJobs,
 		RuntimeStarter:        runtimeStarter,
 		RuntimeController:     runtimeController,

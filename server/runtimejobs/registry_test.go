@@ -96,6 +96,51 @@ func TestRegistryStartDetachesRuntimeJobFromCallerCancellation(t *testing.T) {
 	}
 }
 
+func TestRegistryActiveRuntimeJobRequiresCurrentPhaseLaunchID(t *testing.T) {
+	registry := runtimejobs.NewRegistry(runtimejobs.Options{
+		BuildCommand: func(ctx context.Context, launch actions.AgentLaunchContext) (*exec.Cmd, error) {
+			return exec.CommandContext(ctx, "/bin/sh", "-c", "sleep 5"), nil
+		},
+	})
+	defer registry.CancelAll()
+	snapshot, err := registry.Start(context.Background(), runtimejobs.StartRequest{
+		FlowID:   "flow-1",
+		PhaseID:  "implementation",
+		LaunchID: "launch-1",
+		Context: actions.AgentLaunchContext{
+			FlowID:      "flow-1",
+			FlowPhaseID: "implementation",
+			LaunchID:    "launch-1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	record := flowstore.FlowRecord{FlowID: "flow-1"}
+	noLaunch, err := registry.ActiveRuntimeJob(record, flowstore.FlowPhase{PhaseID: "implementation"})
+	if err != nil {
+		t.Fatalf("ActiveRuntimeJob(no launch) error = %v", err)
+	}
+	if noLaunch != nil {
+		t.Fatalf("ActiveRuntimeJob(no launch) = %#v, want nil", noLaunch)
+	}
+	staleLaunch, err := registry.ActiveRuntimeJob(record, flowstore.FlowPhase{PhaseID: "implementation", LaunchIDs: []string{"launch-2"}})
+	if err != nil {
+		t.Fatalf("ActiveRuntimeJob(stale launch) error = %v", err)
+	}
+	if staleLaunch != nil {
+		t.Fatalf("ActiveRuntimeJob(stale launch) = %#v, want nil", staleLaunch)
+	}
+	currentLaunch, err := registry.ActiveRuntimeJob(record, flowstore.FlowPhase{PhaseID: "implementation", LaunchIDs: []string{"launch-1"}})
+	if err != nil {
+		t.Fatalf("ActiveRuntimeJob(current launch) error = %v", err)
+	}
+	if currentLaunch == nil || currentLaunch.ID != snapshot.ID {
+		t.Fatalf("ActiveRuntimeJob(current launch) = %#v, want job %s", currentLaunch, snapshot.ID)
+	}
+}
+
 func TestRegistryCancelStopsJobWithoutMarkingPhaseNeedsAttention(t *testing.T) {
 	var mu sync.Mutex
 	var phaseUpdates []flowstore.PhaseUpdate

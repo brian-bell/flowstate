@@ -196,7 +196,11 @@ func (s FlowStarter) PrepareFlow(req FlowStartRequest) (FlowStartResult, error) 
 
 	worktree, err := s.createWorktree(req.RepoPath, req.Title, req.BaseRef)
 	if err != nil {
-		return result, s.blockPlanPhase(flow.FlowID, phaseID, "Worktree creation failed: "+err.Error(), err.Error())
+		blockedFlow, blockErr := s.blockPlanPhase(flow.FlowID, phaseID, "Worktree creation failed: "+err.Error(), err.Error())
+		if blockedFlow.FlowID != "" {
+			result.Flow = blockedFlow
+		}
+		return result, blockErr
 	}
 	result.Worktree = worktree
 
@@ -217,7 +221,11 @@ func (s FlowStarter) PrepareFlow(req FlowStartRequest) (FlowStartResult, error) 
 
 	if err := s.runBootstrap(req.RepoPath, worktree); err != nil {
 		errText := "Bootstrap hook failed: " + err.Error()
-		return result, s.blockPlanPhase(flow.FlowID, phaseID, errText, errText)
+		blockedFlow, blockErr := s.blockPlanPhase(flow.FlowID, phaseID, errText, errText)
+		if blockedFlow.FlowID != "" {
+			result.Flow = blockedFlow
+		}
+		return result, blockErr
 	}
 
 	return result, nil
@@ -236,16 +244,17 @@ func (s FlowStarter) runBootstrap(repoPath string, worktree actions.FlowWorktree
 	}, hook)
 }
 
-func (s FlowStarter) blockPlanPhase(flowID, phaseID, notes, resultErr string) error {
-	if _, err := s.setPhase(flowstore.PhaseUpdate{
+func (s FlowStarter) blockPlanPhase(flowID, phaseID, notes, resultErr string) (flowstore.FlowRecord, error) {
+	record, err := s.setPhase(flowstore.PhaseUpdate{
 		FlowID:  flowID,
 		PhaseID: phaseID,
 		Status:  flowstore.PhaseBlocked,
 		Notes:   notes,
-	}); err != nil {
-		return fmt.Errorf("%s; mark flow blocked: %v", resultErr, err)
+	})
+	if err != nil {
+		return flowstore.FlowRecord{}, fmt.Errorf("%s; mark flow blocked: %v", resultErr, err)
 	}
-	return fmt.Errorf("%s", resultErr)
+	return record, fmt.Errorf("%s", resultErr)
 }
 
 func flowStartPromptRecord(flow flowstore.FlowRecord, req FlowStartRequest, worktree actions.FlowWorktreeCreateResult, commit string) flowstore.FlowRecord {
