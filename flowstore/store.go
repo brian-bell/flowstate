@@ -24,8 +24,10 @@ const schemaVersion = 1
 const defaultLockTimeout = 5 * time.Second
 
 var (
-	errFlowNotFound       = errors.New("flow not found")
-	errAutoLaunchOutdated = errors.New("auto launch outdated")
+	// ErrFlowNotFound marks errors for missing Flow records.
+	ErrFlowNotFound = errors.New("flow not found")
+	// ErrAutoLaunchOutdated marks stale automatic launch requests.
+	ErrAutoLaunchOutdated = errors.New("auto launch outdated")
 )
 
 const (
@@ -77,13 +79,13 @@ type StoreOptions struct {
 
 // IsNotFound reports whether err means the requested Flow record does not exist.
 func IsNotFound(err error) bool {
-	return errors.Is(err, errFlowNotFound)
+	return errors.Is(err, ErrFlowNotFound)
 }
 
 // IsAutoLaunchOutdated reports whether err means an automatic launch request
 // lost its race with newer Flow state and should be ignored.
 func IsAutoLaunchOutdated(err error) bool {
-	return errors.Is(err, errAutoLaunchOutdated)
+	return errors.Is(err, ErrAutoLaunchOutdated)
 }
 
 // FlowPhase is one phase in the persisted Flow pipeline.
@@ -828,11 +830,11 @@ func validateAutoPhaseLaunch(record FlowRecord, phase FlowPhase) error {
 	phaseID := artifacts.NormalizePhaseID(phase.PhaseID)
 	switch {
 	case !record.AutoMode:
-		return fmt.Errorf("auto launch for flow %q is disabled: %w", record.FlowID, errAutoLaunchOutdated)
+		return fmt.Errorf("auto launch for flow %q is disabled: %w", record.FlowID, ErrAutoLaunchOutdated)
 	case phaseID == "" || phaseID == "merge":
-		return fmt.Errorf("auto launch target %q is not eligible: %w", phase.PhaseID, errAutoLaunchOutdated)
+		return fmt.Errorf("auto launch target %q is not eligible: %w", phase.PhaseID, ErrAutoLaunchOutdated)
 	case phase.Status != PhaseReady:
-		return fmt.Errorf("auto launch target %q is %s, not ready: %w", phase.PhaseID, phase.Status, errAutoLaunchOutdated)
+		return fmt.Errorf("auto launch target %q is %s, not ready: %w", phase.PhaseID, phase.Status, ErrAutoLaunchOutdated)
 	default:
 		return nil
 	}
@@ -1177,6 +1179,14 @@ func validateChildPhaseUpdate(update ChildPhaseUpdate) error {
 		return fmt.Errorf("child phase order must be positive")
 	}
 	return nil
+}
+
+// RefreshPhaseReadiness recomputes derived phase readiness using the same rules
+// the filesystem store applies on reads and mutations. It is exported so the
+// in-memory fake and future repository implementations reuse one implementation
+// of the readiness rules rather than reimplementing them.
+func RefreshPhaseReadiness(record FlowRecord, now time.Time) FlowRecord {
+	return refreshPhaseReadiness(record, now)
 }
 
 func refreshPhaseReadiness(record FlowRecord, now time.Time) FlowRecord {
@@ -1609,7 +1619,7 @@ func (s *Store) flowDir(flowID string) string {
 }
 
 func flowNotFoundError(flowID string) error {
-	return fmt.Errorf("flow %q not found: %w", flowID, errFlowNotFound)
+	return fmt.Errorf("flow %q not found: %w", flowID, ErrFlowNotFound)
 }
 
 func validateFlowID(flowID string) error {
