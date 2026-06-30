@@ -342,6 +342,42 @@ func TestBindListenersLoopbackTargetBindsOneListener(t *testing.T) {
 	}
 }
 
+func TestBindListenersIPv6LoopbackScopesAliasesToFamily(t *testing.T) {
+	loopback := newBlockingListener(&net.TCPAddr{IP: net.ParseIP("::1"), Port: 5555})
+	listen, _ := fakeListenByAddr(map[string]net.Listener{"[::1]:0": loopback})
+
+	bound, url, err := bindListeners(ResolvedListen{
+		Listen: "[::1]:0",
+		Host:   "::1",
+		Port:   "0",
+		Scope:  ListenerScopeLoopback,
+	}, listen)
+	if err != nil {
+		t.Fatalf("bindListeners returned error: %v", err)
+	}
+	if len(bound) != 1 {
+		t.Fatalf("bound listeners = %d, want 1", len(bound))
+	}
+	if url != "http://[::1]:5555" {
+		t.Fatalf("loopback URL = %q, want bracketed IPv6 loopback URL", url)
+	}
+	endpoint := bound[0].endpoint
+	if endpoint.Host != "::1" || endpoint.Port != "5555" {
+		t.Fatalf("loopback endpoint = %+v, want ::1:5555", endpoint)
+	}
+	endpoints := []AllowedEndpoint{endpoint}
+	for _, host := range []string{"::1", "localhost"} {
+		if !endpointAllowsHost(endpoints, host, "5555") {
+			t.Fatalf("endpointAllowsHost(%q) = false, want true", host)
+		}
+	}
+	// An IPv6-only loopback listener must not advertise the IPv4 loopback alias:
+	// nothing is reachable at 127.0.0.1 on this port.
+	if endpointAllowsHost(endpoints, "127.0.0.1", "5555") {
+		t.Fatal("endpointAllowsHost(127.0.0.1) = true, want false for an ::1 listener")
+	}
+}
+
 func TestBindListenersTailscaleTargetBindsLoopbackAndTailscale(t *testing.T) {
 	loopback := newBlockingListener(&net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 5555})
 	tailscale := newBlockingListener(&net.TCPAddr{IP: net.ParseIP("100.88.77.66"), Port: 8080})

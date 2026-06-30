@@ -466,11 +466,13 @@ func TestHandlerValidatesEndpointOrigins(t *testing.T) {
 	}
 
 	for _, origin := range []string{
-		"http://100.88.77.66:5555", // tailnet host on loopback port
-		"http://127.0.0.1:8080",    // loopback host on tailnet port
-		"http://localhost:8080",    // loopback alias on tailnet port
-		"http://100.88.77.66:9999", // mismatched tailnet port
-		"http://127.0.0.1:9999",    // mismatched loopback port
+		"http://100.88.77.66:5555",            // tailnet host on loopback port
+		"http://127.0.0.1:8080",               // loopback host on tailnet port
+		"http://localhost:8080",               // loopback alias on tailnet port
+		"http://100.88.77.66:9999",            // mismatched tailnet port
+		"http://127.0.0.1:9999",               // mismatched loopback port
+		"http://evil@127.0.0.1:5555",          // userinfo smuggled into an allowed host
+		"http://127.0.0.1:5555@evil.com:5555", // host is actually evil.com
 	} {
 		t.Run("rejects "+origin, func(t *testing.T) {
 			req := newGraphQLRequest()

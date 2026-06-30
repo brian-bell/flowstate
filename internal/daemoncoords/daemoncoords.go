@@ -149,6 +149,9 @@ func isDir(path string) bool {
 }
 
 func (c Coords) validate() error {
+	// The daemon serves plaintext over loopback/Tailscale, so coords URLs are
+	// http:// by design; a future TLS daemon would have to relax this and update
+	// the matching test.
 	parsed, err := url.Parse(c.URL)
 	if err != nil || parsed.Scheme != "http" || parsed.Host == "" {
 		return fmt.Errorf("url must be an absolute http:// URL with a host: %q", c.URL)

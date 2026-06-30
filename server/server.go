@@ -373,10 +373,16 @@ func closeBoundListeners(bound []boundListener) {
 	}
 }
 
+// loopbackEndpoint builds the allowlist entry for a bound loopback listener.
+// Aliases track the bound address family so the entry never admits a Host that
+// does not correspond to a reachable socket: an IPv4 loopback listener accepts
+// localhost and 127.0.0.1, an IPv6 loopback listener accepts localhost and ::1.
 func loopbackEndpoint(host, port string) AllowedEndpoint {
-	aliases := []string{"localhost", "127.0.0.1"}
+	aliases := []string{"localhost"}
 	if host == "::1" {
 		aliases = append(aliases, "::1")
+	} else {
+		aliases = append(aliases, "127.0.0.1")
 	}
 	return AllowedEndpoint{Host: host, Port: port, Aliases: aliases}
 }
@@ -712,7 +718,7 @@ func requireAllowedOrigin(opts HandlerOptions, next http.Handler) http.Handler {
 
 func isAllowedOrigin(origin string, endpoints []AllowedEndpoint) bool {
 	u, err := url.Parse(origin)
-	if err != nil || u.Scheme != "http" || u.Host == "" || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
+	if err != nil || u.Scheme != "http" || u.Host == "" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
 		return false
 	}
 	return endpointAllowsHost(endpoints, u.Hostname(), u.Port())
