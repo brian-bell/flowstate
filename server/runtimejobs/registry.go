@@ -111,6 +111,7 @@ type job struct {
 	snapshot Snapshot
 	tail     logTail
 	cancel   context.CancelFunc
+	startMu  sync.Mutex
 	cmd      *exec.Cmd
 	done     chan struct{}
 }
@@ -250,12 +251,13 @@ func (r *Registry) cancelJob(id, reason string, updatePhase bool) CancelResult {
 	j.snapshot.EndedAt = &now
 	j.snapshot.Error = reason
 	cancel := j.cancel
-	cmd := j.cmd
 	done := j.done
 	snapshot := j.snapshot
 	r.mu.Unlock()
 
 	terminationConfirmed := true
+	j.startMu.Lock()
+	cmd := j.cmd
 	if cmd != nil && cmd.Process != nil {
 		if err := terminateRuntimeCommandFunc(cmd, done, r.cancelGrace); err != nil {
 			r.appendJobError(snapshot.ID, fmt.Sprintf("terminate runtime process group: %v", err))
@@ -267,6 +269,7 @@ func (r *Registry) cancelJob(id, reason string, updatePhase bool) CancelResult {
 	} else if cancel != nil {
 		cancel()
 	}
+	j.startMu.Unlock()
 	if updatePhase && terminationConfirmed {
 		r.markCanceledNeedsAttention(snapshot)
 	}
@@ -344,10 +347,11 @@ func (r *Registry) run(ctx context.Context, id string, launch actions.AgentLaunc
 	writer := r.writer(id)
 	cmd.Stdout = writer
 	cmd.Stderr = writer
-	if !r.storeCommand(id, cmd) {
+	started, err := r.startCommand(id, cmd)
+	if !started {
 		return
 	}
-	if err := cmd.Start(); err != nil {
+	if err != nil {
 		if !r.snapshotIsCanceled(id) {
 			r.fail(id, nil, fmt.Errorf("start agent command: %w", err), launch)
 		}
@@ -368,15 +372,26 @@ func (r *Registry) run(ctx context.Context, id string, launch actions.AgentLaunc
 	r.fail(id, code, err, launch)
 }
 
-func (r *Registry) storeCommand(id string, cmd *exec.Cmd) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+func (r *Registry) startCommand(id string, cmd *exec.Cmd) (bool, error) {
+	r.mu.RLock()
 	j, ok := r.jobs[id]
-	if !ok || terminal(j.snapshot.Status) {
-		return false
+	r.mu.RUnlock()
+	if !ok {
+		return false, nil
 	}
-	j.cmd = cmd
-	return true
+	j.startMu.Lock()
+	defer j.startMu.Unlock()
+
+	r.mu.Lock()
+	current, ok := r.jobs[id]
+	if !ok || terminal(j.snapshot.Status) {
+		r.mu.Unlock()
+		return false, nil
+	}
+	current.cmd = cmd
+	r.mu.Unlock()
+
+	return true, cmd.Start()
 }
 
 func (r *Registry) snapshotIsCanceled(id string) bool {
