@@ -1,0 +1,15 @@
+schema:
+  - server/graph/schema.graphqls
+
+exec:
+  filename: server/graph/generated/generated.go
+  package: generated
+
+model:
+  filename: server/graph/model/models_gen.go
+  package: model
+
+resolver:
+  layout: follow-schema
+  dir: server/graph
+  package: graph

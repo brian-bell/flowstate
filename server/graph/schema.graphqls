@@ -1,0 +1,178 @@
+schema {
+  query: Query
+  mutation: Mutation
+}
+
+scalar Time
+
+type Query {
+  health: String!
+  flows(statuses: [FlowStatus!]): [Flow!]!
+  flow(id: ID!): Flow
+}
+
+type Mutation {
+  createFlow(input: CreateFlowInput!): Flow!
+  createFlowAndLaunchPlan(input: CreateFlowAndLaunchPlanInput!): CreateFlowAndLaunchPlanPayload!
+  launchFlowPhase(input: LaunchFlowPhaseInput!): LaunchFlowPhasePayload!
+  cancelRuntimeJob(id: ID!): RuntimeJob!
+  setFlowPhaseStatus(input: SetFlowPhaseStatusInput!): SetFlowPhaseStatusPayload!
+}
+
+input CreateFlowInput {
+  repoPath: String!
+  title: String!
+  instructions: String!
+  baseRef: String
+}
+
+input CreateFlowAndLaunchPlanInput {
+  repoPath: String!
+  title: String!
+  instructions: String!
+  baseRef: String
+  agentCommand: String
+  reasoningEffort: String
+}
+
+type CreateFlowAndLaunchPlanPayload {
+  flow: Flow!
+  launchId: ID
+  job: RuntimeJob
+  launchError: String!
+}
+
+input LaunchFlowPhaseInput {
+  flowId: ID!
+  phaseId: ID!
+  agentCommand: String
+  reasoningEffort: String
+}
+
+type LaunchFlowPhasePayload {
+  flowId: ID!
+  phaseId: ID!
+  launchId: ID!
+  job: RuntimeJob!
+}
+
+input SetFlowPhaseStatusInput {
+  flowId: ID!
+  phaseId: ID!
+  status: FlowPhaseStatusInput!
+  outcome: String
+  notes: String
+  summary: String
+}
+
+type SetFlowPhaseStatusPayload {
+  flow: Flow!
+  phase: FlowPhase!
+}
+
+enum FlowStatus {
+  PENDING
+  IN_PROGRESS
+  NEEDS_ATTENTION
+  BLOCKED
+  COMPLETED
+  MERGED
+  ABANDONED
+}
+
+enum FlowPhaseStatus {
+  PENDING
+  READY
+  RUNNING
+  NEEDS_ATTENTION
+  COMPLETED
+  BLOCKED
+  SKIPPED
+}
+
+enum FlowPhaseStatusInput {
+  RUNNING
+  NEEDS_ATTENTION
+  COMPLETED
+  BLOCKED
+  SKIPPED
+}
+
+enum FlowPhaseStaleRunningStatus {
+  AWAITING_SESSION
+  SESSION_MISMATCH
+  MISSING_SESSION_ID
+}
+
+type Flow {
+  id: ID!
+  title: String!
+  instructions: String!
+  status: FlowStatus
+  statusRaw: String!
+  repoPath: String!
+  worktreePath: String!
+  branch: String!
+  baseRef: String!
+  commit: String!
+  planId: String!
+  planPath: String!
+  autoMode: Boolean!
+  createdAt: Time!
+  updatedAt: Time!
+  pr: PullRequest!
+  merge: Merge!
+  phases: [FlowPhase!]!
+  nextLaunchablePhase: FlowPhase
+}
+
+type FlowPhase {
+  phaseId: ID!
+  parentPhaseId: ID!
+  title: String!
+  kind: String!
+  status: FlowPhaseStatus
+  statusRaw: String!
+  order: Int!
+  outcome: String!
+  notes: String!
+  summary: String!
+  latestLaunchId: String
+  createdAt: Time!
+  updatedAt: Time!
+  allowedNextStatuses: [FlowPhaseStatus!]!
+  launchable: Boolean!
+  staleRunningStatus: FlowPhaseStaleRunningStatus
+  activeRuntimeJob: RuntimeJob
+}
+
+type PullRequest {
+  provider: String!
+  number: Int!
+  url: String!
+  headBranch: String!
+  baseBranch: String!
+  status: String!
+}
+
+type Merge {
+  status: String!
+  commit: String!
+  mergedAt: Time
+}
+
+type RuntimeJob {
+  id: ID!
+  launchId: ID!
+  flowId: ID!
+  phaseId: ID!
+  status: String!
+  createdAt: Time!
+  startedAt: Time
+  endedAt: Time
+  exitCode: Int
+  error: String!
+  phaseUpdateError: String!
+  logTail: String!
+  logTruncated: Boolean!
+}
