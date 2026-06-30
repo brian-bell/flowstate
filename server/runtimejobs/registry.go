@@ -38,6 +38,8 @@ type CommandBuilder func(context.Context, actions.AgentLaunchContext) (*exec.Cmd
 
 type FlowReader func(string) (flowstore.FlowRecord, error)
 
+type PhaseResetter func(flowstore.PhaseResetUpdate) (flowstore.FlowRecord, error)
+
 type PhaseUpdater func(flowstore.PhaseUpdate) (flowstore.FlowRecord, error)
 
 type Options struct {
@@ -48,6 +50,7 @@ type Options struct {
 	Now          func() time.Time
 	BuildCommand CommandBuilder
 	ReadFlow     FlowReader
+	ResetPhase   PhaseResetter
 	UpdatePhase  PhaseUpdater
 }
 
@@ -90,6 +93,7 @@ type Registry struct {
 	now          func() time.Time
 	buildCommand CommandBuilder
 	readFlow     FlowReader
+	resetPhase   PhaseResetter
 	updatePhase  PhaseUpdater
 	nextID       atomic.Uint64
 }
@@ -130,6 +134,7 @@ func NewRegistry(opts Options) *Registry {
 		now:          now,
 		buildCommand: buildCommand,
 		readFlow:     opts.ReadFlow,
+		resetPhase:   opts.ResetPhase,
 		updatePhase:  opts.UpdatePhase,
 	}
 }
@@ -229,7 +234,10 @@ func (r *Registry) CancelAll() {
 	}
 	r.mu.RUnlock()
 	for _, id := range ids {
-		r.Cancel(id)
+		result := r.Cancel(id)
+		if result.Transition && result.Snapshot.Status == StatusCanceled {
+			r.resetCanceledAwaitingSessionPhase(result.Snapshot)
+		}
 	}
 }
 
@@ -397,6 +405,34 @@ func runtimeFailureOutcome(phaseID string) string {
 	return "runtime_failed"
 }
 
+func (r *Registry) resetCanceledAwaitingSessionPhase(snapshot Snapshot) {
+	if r.readFlow == nil || r.resetPhase == nil {
+		return
+	}
+	record, err := r.readFlow(snapshot.FlowID)
+	if err != nil {
+		r.setPhaseUpdateError(snapshot.ID, fmt.Sprintf("read flow before cancel reset: %v", err))
+		return
+	}
+	phase, ok := phaseByID(record, snapshot.PhaseID)
+	if !ok {
+		r.setPhaseUpdateError(snapshot.ID, fmt.Sprintf("phase %q not found in flow %q", snapshot.PhaseID, snapshot.FlowID))
+		return
+	}
+	if phase.Status != flowstore.PhaseRunning ||
+		flowstore.LatestPhaseLaunchID(phase) != snapshot.LaunchID ||
+		!flowstore.PhaseAwaitingSession(phase) ||
+		flowstore.PhaseSessionLaunchMismatch(phase) {
+		return
+	}
+	if _, err := r.resetPhase(flowstore.PhaseResetUpdate{
+		FlowID:  snapshot.FlowID,
+		PhaseID: snapshot.PhaseID,
+	}); err != nil {
+		r.setPhaseUpdateError(snapshot.ID, fmt.Sprintf("reset phase after cancel: %v", err))
+	}
+}
+
 func (r *Registry) phaseStillActiveForFailure(snapshot Snapshot) bool {
 	if r.readFlow == nil {
 		return true
@@ -406,15 +442,12 @@ func (r *Registry) phaseStillActiveForFailure(snapshot Snapshot) bool {
 		r.setPhaseUpdateError(snapshot.ID, fmt.Sprintf("read flow before runtime failure update: %v", err))
 		return false
 	}
-	phaseID := artifacts.NormalizePhaseID(snapshot.PhaseID)
-	for _, phase := range record.Phases {
-		if artifacts.NormalizePhaseID(phase.PhaseID) != phaseID {
-			continue
-		}
-		return phase.Status == flowstore.PhaseRunning && flowstore.LatestPhaseLaunchID(phase) == snapshot.LaunchID
+	phase, ok := phaseByID(record, snapshot.PhaseID)
+	if !ok {
+		r.setPhaseUpdateError(snapshot.ID, fmt.Sprintf("phase %q not found in flow %q", snapshot.PhaseID, snapshot.FlowID))
+		return false
 	}
-	r.setPhaseUpdateError(snapshot.ID, fmt.Sprintf("phase %q not found in flow %q", snapshot.PhaseID, snapshot.FlowID))
-	return false
+	return phase.Status == flowstore.PhaseRunning && flowstore.LatestPhaseLaunchID(phase) == snapshot.LaunchID
 }
 
 func (r *Registry) setPhaseUpdateError(id, errText string) {
@@ -423,6 +456,24 @@ func (r *Registry) setPhaseUpdateError(id, errText string) {
 	if j, ok := r.jobs[id]; ok {
 		j.snapshot.PhaseUpdateError = errText
 	}
+}
+
+func phaseByID(record flowstore.FlowRecord, phaseID string) (flowstore.FlowPhase, bool) {
+	normalized := artifacts.NormalizePhaseID(phaseID)
+	if normalized == "" {
+		return flowstore.FlowPhase{}, false
+	}
+	for _, phase := range record.Phases {
+		if phase.PhaseID == phaseID {
+			return phase, true
+		}
+	}
+	for _, phase := range record.Phases {
+		if artifacts.NormalizePhaseID(phase.PhaseID) == normalized {
+			return phase, true
+		}
+	}
+	return flowstore.FlowPhase{}, false
 }
 
 func defaultCommandBuilder(ctx context.Context, launch actions.AgentLaunchContext) (*exec.Cmd, error) {

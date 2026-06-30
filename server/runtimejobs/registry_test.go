@@ -142,6 +142,55 @@ func TestRegistryCancelStopsJobWithoutMarkingPhaseNeedsAttention(t *testing.T) {
 	}
 }
 
+func TestRegistryCancelAllResetsAwaitingSessionPhase(t *testing.T) {
+	var mu sync.Mutex
+	var resets []flowstore.PhaseResetUpdate
+	registry := runtimejobs.NewRegistry(runtimejobs.Options{
+		BuildCommand: func(ctx context.Context, launch actions.AgentLaunchContext) (*exec.Cmd, error) {
+			return exec.CommandContext(ctx, "/bin/sh", "-c", "sleep 5"), nil
+		},
+		ReadFlow: func(flowID string) (flowstore.FlowRecord, error) {
+			return flowstore.FlowRecord{
+				FlowID: flowID,
+				Phases: []flowstore.FlowPhase{{
+					PhaseID:   "implementation",
+					Status:    flowstore.PhaseRunning,
+					LaunchIDs: []string{"launch-1"},
+				}},
+			}, nil
+		},
+		ResetPhase: func(update flowstore.PhaseResetUpdate) (flowstore.FlowRecord, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			resets = append(resets, update)
+			return flowstore.FlowRecord{}, nil
+		},
+	})
+
+	snapshot, err := registry.Start(context.Background(), runtimejobs.StartRequest{
+		FlowID:   "flow-1",
+		PhaseID:  "implementation",
+		LaunchID: "launch-1",
+		Context: actions.AgentLaunchContext{
+			FlowID:      "flow-1",
+			FlowPhaseID: "implementation",
+			LaunchID:    "launch-1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	waitForJobStatus(t, registry, snapshot.ID, runtimejobs.StatusRunning)
+
+	registry.CancelAll()
+	waitForJobStatus(t, registry, snapshot.ID, runtimejobs.StatusCanceled)
+	mu.Lock()
+	defer mu.Unlock()
+	if len(resets) != 1 || resets[0].FlowID != "flow-1" || resets[0].PhaseID != "implementation" {
+		t.Fatalf("phase resets = %#v, want shutdown reset for awaiting-session phase", resets)
+	}
+}
+
 func TestRegistryNonZeroExitMarksPhaseNeedsAttention(t *testing.T) {
 	var mu sync.Mutex
 	var phaseUpdates []flowstore.PhaseUpdate

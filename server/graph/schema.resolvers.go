@@ -144,6 +144,7 @@ func (r *mutationResolver) CancelRuntimeJob(ctx context.Context, id string) (*mo
 		}
 		phase, ok := flowlaunch.PhaseByID(record, snapshot.PhaseID)
 		if ok &&
+			phase.Status == flowstore.PhaseRunning &&
 			flowstore.LatestPhaseLaunchID(phase) == snapshot.LaunchID &&
 			flowstore.PhaseAwaitingSession(phase) &&
 			!flowstore.PhaseSessionLaunchMismatch(phase) {
