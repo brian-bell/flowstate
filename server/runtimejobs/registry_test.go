@@ -442,19 +442,22 @@ func TestRegistryCancelRecordsPhaseUpdateFailureOnSnapshot(t *testing.T) {
 	}
 }
 
-func TestRegistryCancelAllDoesNotMutateFlowPhase(t *testing.T) {
+func TestRegistryCancelAllMarksMatchingRunningPhaseNeedsAttention(t *testing.T) {
 	var mu sync.Mutex
-	var reads int
 	var phaseUpdates []flowstore.PhaseUpdate
 	registry := runtimejobs.NewRegistry(runtimejobs.Options{
 		BuildCommand: func(ctx context.Context, launch actions.AgentLaunchContext) (*exec.Cmd, error) {
 			return exec.CommandContext(ctx, "/bin/sh", "-c", "sleep 5"), nil
 		},
 		ReadFlow: func(flowID string) (flowstore.FlowRecord, error) {
-			mu.Lock()
-			defer mu.Unlock()
-			reads++
-			return flowstore.FlowRecord{}, nil
+			return flowstore.FlowRecord{
+				FlowID: flowID,
+				Phases: []flowstore.FlowPhase{{
+					PhaseID:   "implementation",
+					Status:    flowstore.PhaseRunning,
+					LaunchIDs: []string{"launch-1"},
+				}},
+			}, nil
 		},
 		UpdatePhase: func(update flowstore.PhaseUpdate) (flowstore.FlowRecord, error) {
 			mu.Lock()
@@ -486,8 +489,15 @@ func TestRegistryCancelAllDoesNotMutateFlowPhase(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if reads != 0 || len(phaseUpdates) != 0 {
-		t.Fatalf("shutdown cleanup read count=%d updates=%#v, want no flow mutation", reads, phaseUpdates)
+	if len(phaseUpdates) != 1 ||
+		phaseUpdates[0].FlowID != "flow-1" ||
+		phaseUpdates[0].PhaseID != "implementation" ||
+		phaseUpdates[0].Status != flowstore.PhaseNeedsAttention ||
+		phaseUpdates[0].Outcome != "runtime_canceled" ||
+		phaseUpdates[0].ExpectedStatus != flowstore.PhaseRunning ||
+		phaseUpdates[0].ExpectedLatestLaunchID != snapshot.LaunchID ||
+		!strings.Contains(phaseUpdates[0].Notes, "server shut down") {
+		t.Fatalf("phase updates = %#v, want recoverable shutdown cancellation", phaseUpdates)
 	}
 }
 

@@ -35,6 +35,11 @@ const (
 	defaultCancelGrace  = 2 * time.Second
 )
 
+const (
+	runtimeCancelUserRequest    = "runtime job canceled: user requested cancellation"
+	runtimeCancelServerShutdown = "runtime job canceled: server shutting down"
+)
+
 type CommandBuilder func(context.Context, actions.AgentLaunchContext) (*exec.Cmd, error)
 
 type FlowReader func(string) (flowstore.FlowRecord, error)
@@ -216,7 +221,7 @@ func (r *Registry) Lookup(id string) (Snapshot, bool) {
 }
 
 func (r *Registry) Cancel(id string) CancelResult {
-	return r.cancelJob(id, "runtime job canceled: user requested cancellation", true)
+	return r.cancelJob(id, runtimeCancelUserRequest, true)
 }
 
 func (r *Registry) CancelAll() {
@@ -227,7 +232,7 @@ func (r *Registry) CancelAll() {
 	}
 	r.mu.RUnlock()
 	for _, id := range ids {
-		r.cancelJob(id, "runtime job canceled: server shutting down", false)
+		r.cancelJob(id, runtimeCancelServerShutdown, true)
 	}
 }
 
@@ -531,7 +536,7 @@ func (r *Registry) markCanceledNeedsAttention(snapshot Snapshot) {
 		PhaseID:                snapshot.PhaseID,
 		Status:                 flowstore.PhaseNeedsAttention,
 		Outcome:                runtimeCanceledOutcome(snapshot.PhaseID),
-		Notes:                  fmt.Sprintf("Runtime job %s canceled by user request.", snapshot.ID),
+		Notes:                  runtimeCanceledNotes(snapshot),
 		ExpectedStatus:         flowstore.PhaseRunning,
 		ExpectedLatestLaunchID: snapshot.LaunchID,
 	}); err != nil {
@@ -544,6 +549,13 @@ func runtimeCanceledOutcome(phaseID string) string {
 		return flowstore.OutcomeChangesRequested
 	}
 	return "runtime_canceled"
+}
+
+func runtimeCanceledNotes(snapshot Snapshot) string {
+	if snapshot.Error == runtimeCancelServerShutdown {
+		return fmt.Sprintf("Runtime job %s canceled because the server shut down.", snapshot.ID)
+	}
+	return fmt.Sprintf("Runtime job %s canceled by user request.", snapshot.ID)
 }
 
 func (r *Registry) phaseStillActiveForFailure(snapshot Snapshot) bool {

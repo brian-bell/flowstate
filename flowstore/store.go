@@ -845,7 +845,8 @@ func PhaseRuntimeRecoveryLaunchable(phase FlowPhase) bool {
 			(strings.HasPrefix(notes, "Runtime job failed: ") ||
 				strings.HasPrefix(notes, "Runtime job failed to start: ") ||
 				(strings.HasPrefix(notes, "Runtime job ") &&
-					strings.Contains(notes, " canceled by user request.")))
+					(strings.Contains(notes, " canceled by user request.") ||
+						strings.Contains(notes, " canceled because the server shut down."))))
 	default:
 		return false
 	}
