@@ -12,13 +12,14 @@ import (
 func configureRuntimeCommand(cmd *exec.Cmd) {}
 
 func terminateRuntimeCommand(cmd *exec.Cmd, done <-chan struct{}, grace time.Duration) error {
-	if err := signalProcess(cmd, os.Interrupt); err != nil {
-		return err
-	}
-	if waitForRuntimeCommand(done, grace) {
+	interruptErr := signalProcess(cmd, os.Interrupt)
+	if interruptErr == nil && waitForRuntimeCommand(done, grace) {
 		return nil
 	}
 	if err := signalProcess(cmd, os.Kill); err != nil {
+		if interruptErr != nil {
+			return errors.Join(interruptErr, err)
+		}
 		return err
 	}
 	if waitForRuntimeCommand(done, grace) {
@@ -28,12 +29,13 @@ func terminateRuntimeCommand(cmd *exec.Cmd, done <-chan struct{}, grace time.Dur
 }
 
 func terminateStartedRuntimeCommand(cmd *exec.Cmd, grace time.Duration) error {
-	if err := signalProcess(cmd, os.Interrupt); err != nil {
-		return err
-	}
+	interruptErr := signalProcess(cmd, os.Interrupt)
 	timer := time.AfterFunc(grace, func() {
 		_ = signalProcess(cmd, os.Kill)
 	})
+	if interruptErr != nil {
+		_ = signalProcess(cmd, os.Kill)
+	}
 	err := cmd.Wait()
 	timer.Stop()
 	return err
