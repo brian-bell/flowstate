@@ -9,6 +9,7 @@ import (
 
 	"github.com/brian-bell/flowstate/flowrepo"
 	"github.com/brian-bell/flowstate/flowstore"
+	"github.com/brian-bell/flowstate/internal/artifacts"
 )
 
 // Factory returns a fresh repository fixture for one contract subtest.
@@ -16,8 +17,12 @@ type Factory func(t testing.TB, clock *ScriptedClock) Fixture
 
 // Fixture contains the repository under test and storage-specific plan seeding.
 type Fixture struct {
-	Repo     flowrepo.FlowRepository
-	SeedPlan func(planID string) string
+	Repo               flowrepo.FlowRepository
+	SeedPlan           func(planID string) string
+	SeedUnreadablePlan func(planID string) string
+	SeedPlanPhase      func(planID, phaseID string) string
+	PlanPhaseStatus    func(planID, phaseID string) string
+	BreakPlanMetadata  func(planID string)
 }
 
 // ScriptedClock is a deterministic clock for repository contract assertions.
@@ -58,7 +63,7 @@ func RunContract(t testing.TB, factory Factory) {
 
 	runner.Run("create read list delete ordering", func(t *testing.T) {
 		clock := NewScriptedClock()
-		fixture := factory(t, clock)
+		fixture := contractFixture(t, factory, clock)
 		repo := fixture.Repo
 		repoPath := filepath.Join(t.TempDir(), "repo")
 
@@ -106,9 +111,53 @@ func RunContract(t testing.TB, factory Factory) {
 		}
 	})
 
+	runner.Run("classified errors and generated id collisions", func(t *testing.T) {
+		clock := NewScriptedClock()
+		fixture := contractFixture(t, factory, clock)
+		repo := fixture.Repo
+		repoPath := filepath.Join(t.TempDir(), "repo")
+
+		if _, err := repo.Read("missing-flow"); !flowstore.IsNotFound(err) {
+			t.Fatalf("Read(missing) error = %v, want IsNotFound", err)
+		}
+		if err := repo.Delete("missing-flow"); !flowstore.IsNotFound(err) {
+			t.Fatalf("Delete(missing) error = %v, want IsNotFound", err)
+		}
+		if _, err := repo.SetAutoMode(flowstore.AutoModeUpdate{FlowID: "missing-flow", Enabled: false}); !flowstore.IsNotFound(err) {
+			t.Fatalf("SetAutoMode(missing) error = %v, want IsNotFound", err)
+		}
+
+		clock.At(30)
+		first := createFlow(t, repo, flowstore.FlowRecord{
+			Title:        "Collision Flow",
+			Instructions: "first",
+			RepoPath:     repoPath,
+		})
+		second := createFlow(t, repo, flowstore.FlowRecord{
+			Title:        "Collision Flow",
+			Instructions: "second",
+			RepoPath:     repoPath,
+		})
+		if got, want := []string{first.FlowID, second.FlowID}, []string{"20260630T120030Z-collision-flow", "20260630T120030Z-collision-flow-2"}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("generated flow IDs = %v, want %v", got, want)
+		}
+
+		flow := newDefaultFlow(t, repo, clock, "auto-launch-outdated")
+		clock.At(31)
+		flow = setAutoMode(t, repo, flowstore.AutoModeUpdate{FlowID: flow.FlowID, Enabled: false})
+		if _, err := repo.AddPhaseLaunchID(flowstore.PhaseLaunchUpdate{
+			FlowID:     flow.FlowID,
+			PhaseID:    "plan",
+			LaunchID:   "auto-launch-1",
+			AutoLaunch: true,
+		}); !flowstore.IsAutoLaunchOutdated(err) {
+			t.Fatalf("AddPhaseLaunchID(stale auto launch) error = %v, want IsAutoLaunchOutdated", err)
+		}
+	})
+
 	runner.Run("set phase validates transitions and plan review outcomes", func(t *testing.T) {
 		clock := NewScriptedClock()
-		fixture := factory(t, clock)
+		fixture := contractFixture(t, factory, clock)
 		repo := fixture.Repo
 		record := newDefaultFlow(t, repo, clock, "phase-validation")
 
@@ -148,7 +197,7 @@ func RunContract(t testing.TB, factory Factory) {
 		for i, tc := range cases {
 			t.Run(tc.name, func(t *testing.T) {
 				clock := NewScriptedClock()
-				fixture := factory(t, clock)
+				fixture := contractFixture(t, factory, clock)
 				repo := fixture.Repo
 				record := newDefaultFlow(t, repo, clock, fmt.Sprintf("plan-review-%d", i))
 				clock.At(2)
@@ -174,9 +223,58 @@ func RunContract(t testing.TB, factory Factory) {
 		}
 	})
 
+	runner.Run("set phase syncs linked plan phases", func(t *testing.T) {
+		clock := NewScriptedClock()
+		fixture := contractFixture(t, factory, clock)
+		repo := fixture.Repo
+		if fixture.SeedPlanPhase == nil || fixture.PlanPhaseStatus == nil || fixture.BreakPlanMetadata == nil {
+			t.Fatal("fixture must support linked plan phase sync assertions")
+		}
+
+		record := newDefaultFlow(t, repo, clock, "linked-plan-sync-success")
+		planPath := fixture.SeedPlanPhase("linked-plan-success", "plan")
+		clock.At(2)
+		record = setPlanLink(t, repo, flowstore.PlanLinkUpdate{FlowID: record.FlowID, PlanID: "linked-plan-success", PlanPath: planPath})
+		clock.At(3)
+		record = setPhase(t, repo, flowstore.PhaseUpdate{FlowID: record.FlowID, PhaseID: "plan", Status: flowstore.PhaseCompleted})
+		if got := phaseByID(t, record, "plan").Status; got != flowstore.PhaseCompleted {
+			t.Fatalf("flow plan phase status = %q, want completed", got)
+		}
+		if got := fixture.PlanPhaseStatus("linked-plan-success", "plan"); got != flowstore.PhaseCompleted {
+			t.Fatalf("linked plan phase status = %q, want completed", got)
+		}
+
+		failing := newDefaultFlow(t, repo, clock, "linked-plan-sync-failure")
+		failingPlanPath := fixture.SeedPlanPhase("linked-plan-failure", "plan")
+		clock.At(4)
+		failing = setPlanLink(t, repo, flowstore.PlanLinkUpdate{FlowID: failing.FlowID, PlanID: "linked-plan-failure", PlanPath: failingPlanPath})
+		fixture.BreakPlanMetadata("linked-plan-failure")
+		clock.At(5)
+		if _, err := repo.SetPhase(flowstore.PhaseUpdate{FlowID: failing.FlowID, PhaseID: "plan", Status: flowstore.PhaseCompleted}); err == nil {
+			t.Fatal("SetPhase(completed with broken linked plan) error = nil")
+		}
+		failing = readFlow(t, repo, failing.FlowID)
+		if phase := phaseByID(t, failing, "plan"); phase.Status != flowstore.PhaseNeedsAttention || phase.Outcome != "" {
+			t.Fatalf("failed sync phase = (%s, %q), want (needs_attention, empty outcome): %#v", phase.Status, phase.Outcome, phase)
+		}
+
+		repeat := newDefaultFlow(t, repo, clock, "linked-plan-repeat-failure")
+		repeatPlanPath := fixture.SeedPlanPhase("linked-plan-repeat", "plan")
+		clock.At(6)
+		repeat = setPlanLink(t, repo, flowstore.PlanLinkUpdate{FlowID: repeat.FlowID, PlanID: "linked-plan-repeat", PlanPath: repeatPlanPath})
+		clock.At(7)
+		repeat = setPhase(t, repo, flowstore.PhaseUpdate{FlowID: repeat.FlowID, PhaseID: "plan", Status: flowstore.PhaseCompleted})
+		fixture.BreakPlanMetadata("linked-plan-repeat")
+		clock.At(8)
+		repeat = setPhase(t, repo, flowstore.PhaseUpdate{FlowID: repeat.FlowID, PhaseID: "plan", Status: flowstore.PhaseCompleted})
+		if got := phaseByID(t, repeat, "plan").Status; got != flowstore.PhaseCompleted {
+			t.Fatalf("repeat completed phase status = %q, want completed despite sync failure", got)
+		}
+	})
+
 	runner.Run("derived status and readiness parity", func(t *testing.T) {
 		clock := NewScriptedClock()
-		fixture := factory(t, clock)
+		fixture := contractFixture(t, factory, clock)
 		repo := fixture.Repo
 		record := newDefaultFlow(t, repo, clock, "derived")
 		assertDerived(t, record)
@@ -218,7 +316,7 @@ func RunContract(t testing.TB, factory Factory) {
 
 	runner.Run("remaining mutator parity", func(t *testing.T) {
 		clock := NewScriptedClock()
-		fixture := factory(t, clock)
+		fixture := contractFixture(t, factory, clock)
 		repo := fixture.Repo
 
 		record := newDefaultFlow(t, repo, clock, "mutators")
@@ -245,17 +343,80 @@ func RunContract(t testing.TB, factory Factory) {
 			t.Fatalf("implementation child rows = %#v, want one updated child", children)
 		}
 
-		planPath := fixture.SeedPlan("plan-1")
+		duplicateFlow := createFlow(t, repo, flowstore.FlowRecord{
+			FlowID:       "duplicate-child",
+			Title:        "Duplicate child",
+			Instructions: "repair legacy duplicate phase rows",
+			RepoPath:     filepath.Join(t.TempDir(), "repo"),
+			Phases: []flowstore.FlowPhase{
+				{PhaseID: "implementation", Title: "Implementation", Kind: "implementation", Status: flowstore.PhaseReady, Order: 1},
+				{
+					PhaseID:       "implementation-api",
+					ParentPhaseID: "implementation",
+					Title:         "API",
+					Kind:          "implementation_child",
+					Status:        flowstore.PhasePending,
+					Order:         10,
+					LaunchIDs:     []string{"launch-a"},
+					Sessions:      []flowstore.Session{{Provider: "codex", SessionID: "session-a", LaunchID: "launch-a"}},
+				},
+				{
+					PhaseID:       " Implementation-API ",
+					ParentPhaseID: "implementation",
+					Title:         "API stale",
+					Kind:          "implementation_child",
+					Status:        flowstore.PhasePending,
+					Order:         20,
+					LaunchIDs:     []string{"launch-b"},
+					Sessions:      []flowstore.Session{{Provider: "codex", SessionID: "session-b", LaunchID: "launch-b"}},
+					Notes:         "stale notes",
+					Summary:       "stale summary",
+				},
+			},
+		})
 		clock.At(6)
+		duplicateFlow = addChildPhase(t, repo, flowstore.ChildPhaseUpdate{
+			FlowID:        duplicateFlow.FlowID,
+			ParentPhaseID: "implementation",
+			PhaseID:       "implementation-api",
+			Title:         "API repaired",
+			Order:         15,
+		})
+		duplicateChildren := phasesByNormalizedID(duplicateFlow, "implementation-api")
+		if len(duplicateChildren) != 1 {
+			t.Fatalf("normalized implementation-api rows = %d, want 1: %#v", len(duplicateChildren), duplicateChildren)
+		}
+		child := duplicateChildren[0]
+		if child.Title != "API repaired" || child.Order != 15 {
+			t.Fatalf("repaired child = (%q, %d), want (API repaired, 15)", child.Title, child.Order)
+		}
+		if got, want := child.LaunchIDs, []string{"launch-a", "launch-b"}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("repaired child launch IDs = %v, want %v", got, want)
+		}
+		if got := len(child.Sessions); got != 2 {
+			t.Fatalf("repaired child sessions len = %d, want 2: %#v", got, child.Sessions)
+		}
+
+		planPath := fixture.SeedPlan("plan-1")
+		clock.At(7)
 		record = setPlanLink(t, repo, flowstore.PlanLinkUpdate{FlowID: record.FlowID, PlanID: "plan-1", PlanPath: planPath})
 		if record.PlanID != "plan-1" || record.PlanPath != planPath {
 			t.Fatalf("plan link = (%q, %q), want (%q, %q)", record.PlanID, record.PlanPath, "plan-1", planPath)
 		}
+		if _, err := repo.SetPlanLink(flowstore.PlanLinkUpdate{FlowID: record.FlowID, PlanID: "../bad-plan"}); err == nil {
+			t.Fatal("SetPlanLink(invalid plan id) error = nil")
+		}
 		if _, err := repo.SetPlanLink(flowstore.PlanLinkUpdate{FlowID: record.FlowID, PlanID: "missing-plan"}); err == nil {
 			t.Fatal("SetPlanLink(missing) error = nil")
 		}
+		if fixture.SeedUnreadablePlan != nil {
+			brokenPath := fixture.SeedUnreadablePlan("broken-plan")
+			if _, err := repo.SetPlanLink(flowstore.PlanLinkUpdate{FlowID: record.FlowID, PlanID: "broken-plan", PlanPath: brokenPath}); err == nil {
+				t.Fatal("SetPlanLink(unreadable seeded plan) error = nil")
+			}
+		}
 
-		clock.At(7)
+		clock.At(8)
 		record = setStartMetadata(t, repo, flowstore.StartMetadataUpdate{
 			FlowID:       record.FlowID,
 			WorktreePath: filepath.Join(t.TempDir(), "worktree"),
@@ -280,7 +441,7 @@ func RunContract(t testing.TB, factory Factory) {
 		}); err == nil {
 			t.Fatal("SetPR(mismatched head) error = nil")
 		}
-		clock.At(8)
+		clock.At(9)
 		record = setPR(t, repo, flowstore.PRUpdate{
 			FlowID:     record.FlowID,
 			Provider:   "github",
@@ -294,12 +455,12 @@ func RunContract(t testing.TB, factory Factory) {
 			t.Fatalf("PR metadata = %#v", record.PR)
 		}
 
-		clock.At(9)
+		clock.At(10)
 		record = setAutoMode(t, repo, flowstore.AutoModeUpdate{FlowID: record.FlowID, Enabled: false})
 		if record.AutoMode {
 			t.Fatal("AutoMode = true, want false")
 		}
-		clock.At(10)
+		clock.At(11)
 		record = setAutoMode(t, repo, flowstore.AutoModeUpdate{FlowID: record.FlowID, Enabled: true})
 		if !record.AutoMode {
 			t.Fatal("AutoMode = false, want true")
@@ -315,16 +476,16 @@ func RunContract(t testing.TB, factory Factory) {
 		if _, err := repo.ResetAwaitingSessionPhase(flowstore.PhaseResetUpdate{FlowID: launchFlow.FlowID, PhaseID: "plan"}); err == nil {
 			t.Fatal("ResetAwaitingSessionPhase(ready phase) error = nil")
 		}
-		clock.At(11)
-		launchFlow = addPhaseLaunchID(t, repo, flowstore.PhaseLaunchUpdate{FlowID: launchFlow.FlowID, PhaseID: "plan", LaunchID: "launch-1"})
 		clock.At(12)
-		launchFlow = addPhaseLaunchID(t, repo, flowstore.PhaseLaunchUpdate{FlowID: launchFlow.FlowID, PhaseID: "plan", LaunchID: "launch-1", Resume: true})
+		launchFlow = addPhaseLaunchID(t, repo, flowstore.PhaseLaunchUpdate{FlowID: launchFlow.FlowID, PhaseID: "plan", LaunchID: "launch-1"})
 		clock.At(13)
+		launchFlow = addPhaseLaunchID(t, repo, flowstore.PhaseLaunchUpdate{FlowID: launchFlow.FlowID, PhaseID: "plan", LaunchID: "launch-1", Resume: true})
+		clock.At(14)
 		launchFlow = addPhaseLaunchID(t, repo, flowstore.PhaseLaunchUpdate{FlowID: launchFlow.FlowID, PhaseID: "plan", LaunchID: "launch-2", Resume: true})
 		if got, want := phaseByID(t, launchFlow, "plan").LaunchIDs, []string{"launch-1", "launch-2"}; !reflect.DeepEqual(got, want) {
 			t.Fatalf("launch IDs = %v, want %v", got, want)
 		}
-		clock.At(14)
+		clock.At(15)
 		launchFlow = resetAwaitingSessionPhase(t, repo, flowstore.PhaseResetUpdate{FlowID: launchFlow.FlowID, PhaseID: "plan"})
 		planPhase := phaseByID(t, launchFlow, "plan")
 		if planPhase.Status != flowstore.PhaseReady || len(planPhase.LaunchIDs) != 1 || planPhase.LaunchIDs[0] != "launch-1" {
@@ -334,7 +495,7 @@ func RunContract(t testing.TB, factory Factory) {
 
 	runner.Run("set merge parity", func(t *testing.T) {
 		clock := NewScriptedClock()
-		fixture := factory(t, clock)
+		fixture := contractFixture(t, factory, clock)
 		repo := fixture.Repo
 		repoPath := filepath.Join(t.TempDir(), "repo")
 		mergedAt := clock.At(20)
@@ -383,7 +544,7 @@ func RunContract(t testing.TB, factory Factory) {
 
 	runner.Run("attach session replaces by provider and session id", func(t *testing.T) {
 		clock := NewScriptedClock()
-		fixture := factory(t, clock)
+		fixture := contractFixture(t, factory, clock)
 		repo := fixture.Repo
 		record := newDefaultFlow(t, repo, clock, "sessions")
 		clock.At(2)
@@ -425,6 +586,30 @@ func RunContract(t testing.TB, factory Factory) {
 			t.Fatalf("sessions order/identity = %#v", phase.Sessions)
 		}
 	})
+}
+
+func contractFixture(t testing.TB, factory Factory, clock *ScriptedClock) Fixture {
+	t.Helper()
+	fixture := factory(t, clock)
+	if fixture.Repo == nil {
+		t.Fatal("FlowRepository contract fixture returned nil Repo")
+	}
+	if fixture.SeedPlan == nil {
+		t.Fatal("FlowRepository contract fixture must provide SeedPlan")
+	}
+	if fixture.SeedUnreadablePlan == nil {
+		t.Fatal("FlowRepository contract fixture must provide SeedUnreadablePlan")
+	}
+	if fixture.SeedPlanPhase == nil {
+		t.Fatal("FlowRepository contract fixture must provide SeedPlanPhase")
+	}
+	if fixture.PlanPhaseStatus == nil {
+		t.Fatal("FlowRepository contract fixture must provide PlanPhaseStatus")
+	}
+	if fixture.BreakPlanMetadata == nil {
+		t.Fatal("FlowRepository contract fixture must provide BreakPlanMetadata")
+	}
+	return fixture
 }
 
 func newDefaultFlow(t testing.TB, repo flowrepo.FlowRepository, clock *ScriptedClock, id string) flowstore.FlowRecord {
@@ -599,6 +784,17 @@ func phasesByID(record flowstore.FlowRecord, phaseID string) []flowstore.FlowPha
 	var phases []flowstore.FlowPhase
 	for _, phase := range record.Phases {
 		if phase.PhaseID == phaseID {
+			phases = append(phases, phase)
+		}
+	}
+	return phases
+}
+
+func phasesByNormalizedID(record flowstore.FlowRecord, phaseID string) []flowstore.FlowPhase {
+	var phases []flowstore.FlowPhase
+	want := artifacts.NormalizePhaseID(phaseID)
+	for _, phase := range record.Phases {
+		if artifacts.NormalizePhaseID(phase.PhaseID) == want {
 			phases = append(phases, phase)
 		}
 	}

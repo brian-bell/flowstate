@@ -3,6 +3,7 @@ package flowrepo
 import (
 	"fmt"
 	"net/url"
+	"os"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -23,14 +24,23 @@ type FakeOptions struct {
 	PlanPaths map[string]string
 }
 
+type fakePlanPhase struct {
+	PhaseID string
+	Title   string
+	Status  string
+	Order   int
+}
+
 // Fake is an in-memory FlowRepository for tests and future repository contract
 // checks. It stores copies at the repository boundary so callers cannot mutate
 // persisted state through returned records.
 type Fake struct {
-	mu        sync.Mutex
-	now       func() time.Time
-	records   map[string]flowstore.FlowRecord
-	planPaths map[string]string
+	mu                 sync.Mutex
+	now                func() time.Time
+	records            map[string]flowstore.FlowRecord
+	planPaths          map[string]string
+	planPhases         map[string][]fakePlanPhase
+	brokenPlanMetadata map[string]bool
 }
 
 var _ FlowRepository = (*Fake)(nil)
@@ -46,9 +56,11 @@ func NewFake(opts FakeOptions) *Fake {
 		planPaths[id] = path
 	}
 	return &Fake{
-		now:       now,
-		records:   make(map[string]flowstore.FlowRecord),
-		planPaths: planPaths,
+		now:                now,
+		records:            make(map[string]flowstore.FlowRecord),
+		planPaths:          planPaths,
+		planPhases:         make(map[string][]fakePlanPhase),
+		brokenPlanMetadata: make(map[string]bool),
 	}
 }
 
@@ -57,6 +69,51 @@ func (f *Fake) SeedPlan(planID, planPath string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.planPaths[planID] = planPath
+	delete(f.brokenPlanMetadata, planID)
+}
+
+// SeedPlanPhase records saved-plan phase metadata for linked phase sync tests.
+func (f *Fake) SeedPlanPhase(planID, phaseID, title, status string, order int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	phase := fakePlanPhase{
+		PhaseID: artifacts.NormalizePhaseID(phaseID),
+		Title:   strings.TrimSpace(title),
+		Status:  strings.TrimSpace(status),
+		Order:   order,
+	}
+	phases := f.planPhases[planID]
+	updated := false
+	for i, existing := range phases {
+		if artifacts.NormalizePhaseID(existing.PhaseID) == phase.PhaseID {
+			phases[i] = phase
+			updated = true
+			break
+		}
+	}
+	if !updated {
+		phases = append(phases, phase)
+	}
+	f.planPhases[planID] = phases
+	delete(f.brokenPlanMetadata, planID)
+}
+
+// PlanPhaseStatus reports a seeded linked-plan phase status.
+func (f *Fake) PlanPhaseStatus(planID, phaseID string) (string, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	phase, ok := f.planPhaseLocked(planID, phaseID)
+	if !ok {
+		return "", false
+	}
+	return phase.Status, true
+}
+
+// BreakPlanMetadata makes later linked-plan metadata reads fail for planID.
+func (f *Fake) BreakPlanMetadata(planID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.brokenPlanMetadata[planID] = true
 }
 
 func (f *Fake) Read(flowID string) (flowstore.FlowRecord, error) {
@@ -106,14 +163,16 @@ func (f *Fake) Create(record flowstore.FlowRecord) (flowstore.FlowRecord, error)
 		return flowstore.FlowRecord{}, fmt.Errorf("flow repo path must be absolute: %s", record.RepoPath)
 	}
 	now := f.now()
-	if record.FlowID == "" {
-		record.FlowID = generatedFlowID(record.Title, now)
-	} else if err := validateSafeID("flow", record.FlowID); err != nil {
-		return flowstore.FlowRecord{}, err
+	if record.FlowID != "" {
+		if err := validateSafeID("flow", record.FlowID); err != nil {
+			return flowstore.FlowRecord{}, err
+		}
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if _, ok := f.records[record.FlowID]; ok {
+	if record.FlowID == "" {
+		record.FlowID = f.generatedFlowIDLocked(record.Title, now)
+	} else if _, ok := f.records[record.FlowID]; ok {
 		return flowstore.FlowRecord{}, fmt.Errorf("flow %q already exists", record.FlowID)
 	}
 	record.SchemaVersion = fakeSchemaVersion
@@ -128,43 +187,75 @@ func (f *Fake) Create(record flowstore.FlowRecord) (flowstore.FlowRecord, error)
 	return cloneRecord(record), nil
 }
 
+func (f *Fake) generatedFlowIDLocked(title string, now time.Time) string {
+	base := now.UTC().Format("20060102T150405Z") + "-" + artifacts.Slug(title, "flow")
+	candidate := base
+	for i := 2; ; i++ {
+		if _, ok := f.records[candidate]; !ok {
+			return candidate
+		}
+		candidate = fmt.Sprintf("%s-%d", base, i)
+	}
+}
+
 func (f *Fake) SetPhase(update flowstore.PhaseUpdate) (flowstore.FlowRecord, error) {
 	update.PhaseID = artifacts.NormalizePhaseID(update.PhaseID)
 	if err := validateSafeID("flow", update.FlowID); err != nil {
 		return flowstore.FlowRecord{}, err
 	}
-	return f.updateFlow(update.FlowID, func(record flowstore.FlowRecord, now time.Time) (flowstore.FlowRecord, error) {
-		phaseIndex := phaseIndexByID(record.Phases, update.PhaseID)
-		if phaseIndex < 0 {
-			return flowstore.FlowRecord{}, fmt.Errorf("phase %q not found in flow %q", update.PhaseID, update.FlowID)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	record, ok := f.records[update.FlowID]
+	if !ok {
+		return flowstore.FlowRecord{}, flowNotFound(update.FlowID)
+	}
+	record = cloneRecord(record)
+	phaseIndex := phaseIndexByID(record.Phases, update.PhaseID)
+	if phaseIndex < 0 {
+		return flowstore.FlowRecord{}, fmt.Errorf("phase %q not found in flow %q", update.PhaseID, update.FlowID)
+	}
+
+	now := f.now()
+	phase := record.Phases[phaseIndex]
+	originalStatus := phase.Status
+	if err := validatePhaseUpdate(phase, update); err != nil {
+		return flowstore.FlowRecord{}, err
+	}
+	phase.Status = update.Status
+	if update.Status == flowstore.PhaseRunning {
+		phase.Outcome = ""
+	}
+	if outcome := strings.TrimSpace(update.Outcome); outcome != "" {
+		phase.Outcome = outcome
+	}
+	if update.Notes != "" {
+		phase.Notes = update.Notes
+	}
+	if update.Summary != "" {
+		phase.Summary = update.Summary
+	}
+	phase.PhaseID = update.PhaseID
+	phase.UpdatedAt = now
+	record.Phases[phaseIndex] = phase
+	record.Phases = collapseDuplicatePhaseRows(record.Phases, phaseIndex)
+	if phase.PhaseID == "merge" && (phase.Status == flowstore.PhaseRunning || phase.Status == flowstore.PhaseSkipped) {
+		record.Merge = flowstore.Merge{Status: flowstore.MergePending}
+	}
+	record.UpdatedAt = now
+	record = flowstore.RefreshPhaseReadiness(record, now)
+	record = normalizeRecord(record)
+	f.records[update.FlowID] = cloneRecord(record)
+
+	if err := f.syncLinkedPlanPhaseLocked(record, phase); err != nil {
+		if originalStatus == flowstore.PhaseCompleted {
+			return cloneRecord(record), nil
 		}
-		phase := record.Phases[phaseIndex]
-		if err := validatePhaseUpdate(phase, update); err != nil {
-			return flowstore.FlowRecord{}, err
-		}
-		phase.Status = update.Status
-		if update.Status == flowstore.PhaseRunning {
-			phase.Outcome = ""
-		}
-		if outcome := strings.TrimSpace(update.Outcome); outcome != "" {
-			phase.Outcome = outcome
-		}
-		if update.Notes != "" {
-			phase.Notes = update.Notes
-		}
-		if update.Summary != "" {
-			phase.Summary = update.Summary
-		}
-		phase.PhaseID = update.PhaseID
-		phase.UpdatedAt = now
-		record.Phases[phaseIndex] = phase
-		if phase.PhaseID == "merge" && (phase.Status == flowstore.PhaseRunning || phase.Status == flowstore.PhaseSkipped) {
-			record.Merge = flowstore.Merge{Status: flowstore.MergePending}
-		}
-		record.UpdatedAt = now
-		record = flowstore.RefreshPhaseReadiness(record, now)
-		return record, nil
-	})
+		record = markPhaseSyncNeedsAttention(record, phase, err, now)
+		f.records[update.FlowID] = cloneRecord(record)
+		return flowstore.FlowRecord{}, err
+	}
+	return cloneRecord(record), nil
 }
 
 func (f *Fake) RestartPhase(update flowstore.PhaseRestartUpdate) (flowstore.FlowRecord, error) {
@@ -201,6 +292,7 @@ func (f *Fake) RestartPhase(update flowstore.PhaseRestartUpdate) (flowstore.Flow
 		phase.PhaseID = update.PhaseID
 		phase.UpdatedAt = now
 		record.Phases[phaseIndex] = phase
+		record.Phases = collapseDuplicatePhaseRows(record.Phases, phaseIndex)
 		if phase.PhaseID == "merge" {
 			record.Merge = flowstore.Merge{Status: flowstore.MergePending}
 		}
@@ -228,6 +320,15 @@ func (f *Fake) AddChildPhase(update flowstore.ChildPhaseUpdate) (flowstore.FlowR
 			child := record.Phases[childIndex]
 			if child.ParentPhaseID != update.ParentPhaseID {
 				return flowstore.FlowRecord{}, fmt.Errorf("phase %q already belongs to parent %q", update.PhaseID, child.ParentPhaseID)
+			}
+			record.Phases = collapseDuplicatePhaseRows(record.Phases, childIndex)
+			childIndex = phaseIndexByID(record.Phases, update.PhaseID)
+			child = record.Phases[childIndex]
+			if child.PhaseID == update.PhaseID &&
+				child.Title == strings.TrimSpace(update.Title) &&
+				child.Kind == "implementation_child" &&
+				child.Order == update.Order {
+				return record, nil
 			}
 			child.PhaseID = update.PhaseID
 			child.Title = strings.TrimSpace(update.Title)
@@ -262,9 +363,18 @@ func (f *Fake) SetPlanLink(update flowstore.PlanLinkUpdate) (flowstore.FlowRecor
 	if planID == "" {
 		return flowstore.FlowRecord{}, fmt.Errorf("plan id is required")
 	}
-	planPath, ok := f.planPaths[planID]
+	if err := validateSafeID("plan", planID); err != nil {
+		return flowstore.FlowRecord{}, err
+	}
+	planPath, ok := f.planPath(planID)
 	if !ok {
 		return flowstore.FlowRecord{}, fmt.Errorf("plan %q not found", planID)
+	}
+	if !filepath.IsAbs(planPath) {
+		return flowstore.FlowRecord{}, fmt.Errorf("flow plan path must be absolute: %s", planPath)
+	}
+	if _, err := os.ReadFile(planPath); err != nil {
+		return flowstore.FlowRecord{}, fmt.Errorf("read plan %q: %w", planID, err)
 	}
 	if supplied := strings.TrimSpace(update.PlanPath); supplied != "" {
 		if !filepath.IsAbs(supplied) {
@@ -407,6 +517,7 @@ func (f *Fake) AddPhaseLaunchID(update flowstore.PhaseLaunchUpdate) (flowstore.F
 			phase.PhaseID = update.PhaseID
 			phase.UpdatedAt = now
 			record.Phases[phaseIndex] = phase
+			record.Phases = collapseDuplicatePhaseRows(record.Phases, phaseIndex)
 			record.UpdatedAt = now
 			record = flowstore.RefreshPhaseReadiness(record, now)
 			return record, nil
@@ -427,6 +538,7 @@ func (f *Fake) AddPhaseLaunchID(update flowstore.PhaseLaunchUpdate) (flowstore.F
 		phase.PhaseID = update.PhaseID
 		phase.UpdatedAt = now
 		record.Phases[phaseIndex] = phase
+		record.Phases = collapseDuplicatePhaseRows(record.Phases, phaseIndex)
 		if phase.PhaseID == "merge" && phase.Status == flowstore.PhaseRunning {
 			record.Merge = flowstore.Merge{Status: flowstore.MergePending}
 		}
@@ -472,6 +584,7 @@ func (f *Fake) ResetAwaitingSessionPhase(update flowstore.PhaseResetUpdate) (flo
 		phase.PhaseID = update.PhaseID
 		phase.UpdatedAt = now
 		record.Phases[phaseIndex] = phase
+		record.Phases = collapseDuplicatePhaseRows(record.Phases, phaseIndex)
 		if resetIndex := phaseIndexByID(record.Phases, update.PhaseID); resetIndex >= 0 {
 			resetPhase := record.Phases[resetIndex]
 			resetPhase.LaunchIDs = removePhaseLaunchID(resetPhase.LaunchIDs, removedLaunchID)
@@ -525,6 +638,7 @@ func (f *Fake) AttachSession(update flowstore.SessionAttachUpdate) (flowstore.Fl
 		phase.PhaseID = update.PhaseID
 		phase.UpdatedAt = now
 		record.Phases[phaseIndex] = phase
+		record.Phases = collapseDuplicatePhaseRows(record.Phases, phaseIndex)
 		record.UpdatedAt = now
 		return record, nil
 	})
@@ -559,8 +673,68 @@ func (f *Fake) updateFlow(flowID string, mutate func(flowstore.FlowRecord, time.
 	return cloneRecord(updated), nil
 }
 
-func generatedFlowID(title string, now time.Time) string {
-	return now.UTC().Format("20060102T150405Z") + "-" + artifacts.Slug(title, "flow")
+func (f *Fake) planPath(planID string) (string, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	planPath, ok := f.planPaths[planID]
+	return planPath, ok
+}
+
+func (f *Fake) syncLinkedPlanPhaseLocked(record flowstore.FlowRecord, phase flowstore.FlowPhase) error {
+	planID := strings.TrimSpace(record.PlanID)
+	if planID == "" || phase.Status != flowstore.PhaseCompleted {
+		return nil
+	}
+	if f.brokenPlanMetadata[planID] {
+		return fmt.Errorf("sync linked plan phase: plan %q metadata not found", planID)
+	}
+	planPhase, ok := f.planPhaseLocked(planID, phase.PhaseID)
+	if !ok {
+		return nil
+	}
+	if planPhase.Status == flowstore.PhaseCompleted {
+		return nil
+	}
+	planPhase.Status = flowstore.PhaseCompleted
+	phases := f.planPhases[planID]
+	for i, existing := range phases {
+		if artifacts.NormalizePhaseID(existing.PhaseID) == artifacts.NormalizePhaseID(phase.PhaseID) {
+			phases[i] = planPhase
+			f.planPhases[planID] = phases
+			return nil
+		}
+	}
+	return nil
+}
+
+func (f *Fake) planPhaseLocked(planID, phaseID string) (fakePlanPhase, bool) {
+	want := artifacts.NormalizePhaseID(phaseID)
+	for _, phase := range f.planPhases[planID] {
+		if artifacts.NormalizePhaseID(phase.PhaseID) == want {
+			return phase, true
+		}
+	}
+	return fakePlanPhase{}, false
+}
+
+func markPhaseSyncNeedsAttention(record flowstore.FlowRecord, phase flowstore.FlowPhase, syncErr error, now time.Time) flowstore.FlowRecord {
+	failedPhase := phase
+	failedPhase.Status = flowstore.PhaseNeedsAttention
+	failedPhase.Outcome = ""
+	note := fmt.Sprintf("Linked plan phase sync failed: %v", syncErr)
+	if strings.TrimSpace(failedPhase.Notes) != "" {
+		failedPhase.Notes = strings.TrimSpace(failedPhase.Notes) + "\n" + note
+	} else {
+		failedPhase.Notes = note
+	}
+	failedPhase.UpdatedAt = now
+	if failedIndex := phaseIndexByID(record.Phases, failedPhase.PhaseID); failedIndex >= 0 {
+		record.Phases[failedIndex] = failedPhase
+	}
+	record.UpdatedAt = now
+	record = flowstore.RefreshPhaseReadiness(record, now)
+	record.Status = flowstore.DeriveStatus(record)
+	return record
 }
 
 func defaultPhases(createdAt, updatedAt time.Time) []flowstore.FlowPhase {
@@ -635,7 +809,7 @@ func validateSafeID(kind, id string) error {
 }
 
 func flowNotFound(flowID string) error {
-	return fmt.Errorf("flow %q not found", flowID)
+	return fmt.Errorf("flow %q not found: %w", flowID, flowstore.ErrFlowNotFound)
 }
 
 func defaultTime(value, fallback time.Time) time.Time {
@@ -881,11 +1055,11 @@ func validateAutoPhaseLaunch(record flowstore.FlowRecord, phase flowstore.FlowPh
 	phaseID := artifacts.NormalizePhaseID(phase.PhaseID)
 	switch {
 	case !record.AutoMode:
-		return fmt.Errorf("auto launch for flow %q is disabled", record.FlowID)
+		return fmt.Errorf("auto launch for flow %q is disabled: %w", record.FlowID, flowstore.ErrAutoLaunchOutdated)
 	case phaseID == "" || phaseID == "merge":
-		return fmt.Errorf("auto launch target %q is not eligible", phase.PhaseID)
+		return fmt.Errorf("auto launch target %q is not eligible: %w", phase.PhaseID, flowstore.ErrAutoLaunchOutdated)
 	case phase.Status != flowstore.PhaseReady:
-		return fmt.Errorf("auto launch target %q is %s, not ready", phase.PhaseID, phase.Status)
+		return fmt.Errorf("auto launch target %q is %s, not ready: %w", phase.PhaseID, phase.Status, flowstore.ErrAutoLaunchOutdated)
 	default:
 		return nil
 	}
@@ -923,6 +1097,47 @@ func removePhaseLaunchID(values []string, target string) []string {
 		}
 	}
 	return out
+}
+
+func collapseDuplicatePhaseRows(phases []flowstore.FlowPhase, keepIndex int) []flowstore.FlowPhase {
+	survivor := phases[keepIndex]
+	want := artifacts.NormalizePhaseID(survivor.PhaseID)
+	kept := make([]flowstore.FlowPhase, 0, len(phases))
+	survivorPos := -1
+	for i, phase := range phases {
+		if i == keepIndex {
+			survivorPos = len(kept)
+			kept = append(kept, phase)
+			continue
+		}
+		if artifacts.NormalizePhaseID(phase.PhaseID) != want {
+			kept = append(kept, phase)
+			continue
+		}
+		for _, launchID := range phase.LaunchIDs {
+			survivor.LaunchIDs = appendUnique(survivor.LaunchIDs, launchID)
+		}
+		for _, session := range phase.Sessions {
+			survivor.Sessions = appendUniqueSession(survivor.Sessions, session)
+		}
+		if survivor.Notes == "" {
+			survivor.Notes = phase.Notes
+		}
+		if survivor.Summary == "" {
+			survivor.Summary = phase.Summary
+		}
+	}
+	kept[survivorPos] = survivor
+	return kept
+}
+
+func appendUniqueSession(sessions []flowstore.Session, session flowstore.Session) []flowstore.Session {
+	for _, existing := range sessions {
+		if existing.Provider == session.Provider && existing.SessionID == session.SessionID {
+			return sessions
+		}
+	}
+	return append(sessions, session)
 }
 
 func phaseIndexPreferringExactID(phases []flowstore.FlowPhase, phaseID string) int {
