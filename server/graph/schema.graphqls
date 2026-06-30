@@ -39,6 +39,7 @@ type CreateFlowAndLaunchPlanPayload {
   flow: Flow!
   launchId: ID
   job: RuntimeJob
+  launchError: String!
 }
 
 input LaunchFlowPhaseInput {

@@ -7,6 +7,7 @@ package graph
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 
@@ -90,41 +91,26 @@ func (r *mutationResolver) CreateFlowAndLaunchPlan(ctx context.Context, input mo
 	if !flowlaunch.PhaseCanLaunch(record, phase) {
 		return nil, fmt.Errorf("phase %q is not launchable from status %q", phase.PhaseID, phase.Status)
 	}
-	launcher := r.newFlowLauncher(record, command, reasoningEffort)
-	prepared, err := launcher.Preflight(flowlaunch.Request{
-		Record:        record,
-		Phase:         phase,
-		Headless:      true,
-		RejectRunning: true,
-	})
+	launch, err := r.startFlowRuntimeJob(ctx, record, phase, command, reasoningEffort)
 	if err != nil {
-		return nil, err
-	}
-	result, err := launcher.Prepare(prepared)
-	if err != nil {
-		return nil, err
-	}
-	launchContext := result.Context
-	launchContext.Embedded = false
-	launchContext.Headless = true
-	launchContext.FlowLaunchTracked = true
-	snapshot, err := r.RuntimeStarter.Start(ctx, runtimejobs.StartRequest{
-		FlowID:   record.FlowID,
-		PhaseID:  launchContext.FlowPhaseID,
-		LaunchID: launchContext.LaunchID,
-		Context:  launchContext,
-	})
-	if err != nil {
-		if _, updateErr := r.FlowStore.SetPhase(flowstore.PhaseUpdate{
-			FlowID:  record.FlowID,
-			PhaseID: launchContext.FlowPhaseID,
-			Status:  flowstore.PhaseNeedsAttention,
-			Outcome: launchStartFailureOutcome(launchContext.FlowPhaseID),
-			Notes:   "Runtime job failed to start: " + err.Error(),
-		}); updateErr != nil {
-			return nil, fmt.Errorf("runtime job failed to start: %w; additionally failed to mark phase needs_attention: %v", err, updateErr)
+		var startErr *flowRuntimeStartError
+		if !errors.As(err, &startErr) {
+			return nil, err
 		}
-		return nil, err
+		updated, readErr := r.FlowStore.Read(record.FlowID)
+		if readErr != nil {
+			return nil, readErr
+		}
+		view, buildErr := flowquery.BuildWithRuntime(updated, r.RuntimeJobs)
+		if buildErr != nil {
+			view = flowquery.Build(updated)
+		}
+		launchID := launch.Context.LaunchID
+		return &model.CreateFlowAndLaunchPlanPayload{
+			Flow:        flowToGraphQL(view),
+			LaunchID:    &launchID,
+			LaunchError: startErr.err.Error(),
+		}, nil
 	}
 	updated, err := r.FlowStore.Read(record.FlowID)
 	if err != nil {
@@ -134,11 +120,12 @@ func (r *mutationResolver) CreateFlowAndLaunchPlan(ctx context.Context, input mo
 	if err != nil {
 		view = flowquery.Build(updated)
 	}
-	launchID := launchContext.LaunchID
+	launchID := launch.Context.LaunchID
 	return &model.CreateFlowAndLaunchPlanPayload{
-		Flow:     flowToGraphQL(view),
-		LaunchID: &launchID,
-		Job:      runtimeJobSnapshotToGraphQL(snapshot),
+		Flow:        flowToGraphQL(view),
+		LaunchID:    &launchID,
+		Job:         runtimeJobSnapshotToGraphQL(launch.Snapshot),
+		LaunchError: "",
 	}, nil
 }
 
@@ -169,47 +156,15 @@ func (r *mutationResolver) LaunchFlowPhase(ctx context.Context, input model.Laun
 	if err != nil {
 		return nil, err
 	}
-	launcher := r.newFlowLauncher(record, command, reasoningEffort)
-	prepared, err := launcher.Preflight(flowlaunch.Request{
-		Record:        record,
-		Phase:         phase,
-		Headless:      true,
-		RejectRunning: true,
-	})
+	launch, err := r.startFlowRuntimeJob(ctx, record, phase, command, reasoningEffort)
 	if err != nil {
-		return nil, err
-	}
-	result, err := launcher.Prepare(prepared)
-	if err != nil {
-		return nil, err
-	}
-	launchContext := result.Context
-	launchContext.Embedded = false
-	launchContext.Headless = true
-	launchContext.FlowLaunchTracked = true
-	snapshot, err := r.RuntimeStarter.Start(ctx, runtimejobs.StartRequest{
-		FlowID:   record.FlowID,
-		PhaseID:  launchContext.FlowPhaseID,
-		LaunchID: launchContext.LaunchID,
-		Context:  launchContext,
-	})
-	if err != nil {
-		if _, updateErr := r.FlowStore.SetPhase(flowstore.PhaseUpdate{
-			FlowID:  record.FlowID,
-			PhaseID: launchContext.FlowPhaseID,
-			Status:  flowstore.PhaseNeedsAttention,
-			Outcome: launchStartFailureOutcome(launchContext.FlowPhaseID),
-			Notes:   "Runtime job failed to start: " + err.Error(),
-		}); updateErr != nil {
-			return nil, fmt.Errorf("runtime job failed to start: %w; additionally failed to mark phase needs_attention: %v", err, updateErr)
-		}
 		return nil, err
 	}
 	return &model.LaunchFlowPhasePayload{
 		FlowID:   record.FlowID,
-		PhaseID:  launchContext.FlowPhaseID,
-		LaunchID: launchContext.LaunchID,
-		Job:      runtimeJobSnapshotToGraphQL(snapshot),
+		PhaseID:  launch.Context.FlowPhaseID,
+		LaunchID: launch.Context.LaunchID,
+		Job:      runtimeJobSnapshotToGraphQL(launch.Snapshot),
 	}, nil
 }
 

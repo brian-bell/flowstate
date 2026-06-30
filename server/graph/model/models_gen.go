@@ -20,9 +20,10 @@ type CreateFlowAndLaunchPlanInput struct {
 }
 
 type CreateFlowAndLaunchPlanPayload struct {
-	Flow     *Flow       `json:"flow"`
-	LaunchID *string     `json:"launchId,omitempty"`
-	Job      *RuntimeJob `json:"job,omitempty"`
+	Flow        *Flow       `json:"flow"`
+	LaunchID    *string     `json:"launchId,omitempty"`
+	Job         *RuntimeJob `json:"job,omitempty"`
+	LaunchError string      `json:"launchError"`
 }
 
 type CreateFlowInput struct {

@@ -570,18 +570,48 @@ func TestHandlerGraphQLCreateFlowAndLaunchPlanStartErrorMarksPlanNeedsAttention(
 	})
 
 	var out struct {
-		Data   any   `json:"data"`
+		Data struct {
+			CreateFlowAndLaunchPlan struct {
+				Flow struct {
+					ID     string `json:"id"`
+					Phases []struct {
+						PhaseID        string  `json:"phaseId"`
+						StatusRaw      string  `json:"statusRaw"`
+						LatestLaunchID *string `json:"latestLaunchId"`
+						Outcome        string  `json:"outcome"`
+						Notes          string  `json:"notes"`
+					} `json:"phases"`
+				} `json:"flow"`
+				LaunchID    *string `json:"launchId"`
+				LaunchError string  `json:"launchError"`
+				Job         *struct {
+					ID string `json:"id"`
+				} `json:"job"`
+			} `json:"createFlowAndLaunchPlan"`
+		} `json:"data"`
 		Errors []any `json:"errors"`
 	}
 	postGraphQL(t, handler, `mutation($input: CreateFlowAndLaunchPlanInput!) {
-		createFlowAndLaunchPlan(input: $input) { launchId }
+		createFlowAndLaunchPlan(input: $input) {
+			flow { id phases { phaseId statusRaw latestLaunchId outcome notes } }
+			launchId
+			launchError
+			job { id }
+		}
 	}`, map[string]any{"input": map[string]any{
 		"repoPath":     t.TempDir(),
 		"title":        "Start Error Flow",
 		"instructions": "start runtime",
 	}}, &out)
-	if !graphQLErrorsContain(out.Errors, "runtime unavailable") {
-		t.Fatalf("GraphQL errors = %#v, want runtime start failure", out.Errors)
+	if len(out.Errors) != 0 {
+		t.Fatalf("GraphQL errors = %#v, want partial-success payload without top-level error", out.Errors)
+	}
+	payload := out.Data.CreateFlowAndLaunchPlan
+	if payload.Flow.ID == "" ||
+		payload.LaunchID == nil ||
+		payload.LaunchError != "runtime unavailable" ||
+		payload.Job != nil {
+		t.Fatalf("payload = %#v, want created flow with launch error and no job", payload)
 	}
 	records, err := store.List(flowstore.FlowFilter{})
 	if err != nil {
@@ -596,6 +626,27 @@ func TestHandlerGraphQLCreateFlowAndLaunchPlanStartErrorMarksPlanNeedsAttention(
 		!strings.Contains(phase.Notes, "runtime unavailable") ||
 		len(phase.LaunchIDs) != 1 {
 		t.Fatalf("plan phase after start failure = %#v, want needs_attention with launch ID", phase)
+	}
+	var planPhase *struct {
+		PhaseID        string  `json:"phaseId"`
+		StatusRaw      string  `json:"statusRaw"`
+		LatestLaunchID *string `json:"latestLaunchId"`
+		Outcome        string  `json:"outcome"`
+		Notes          string  `json:"notes"`
+	}
+	for i := range payload.Flow.Phases {
+		if payload.Flow.Phases[i].PhaseID == "plan" {
+			planPhase = &payload.Flow.Phases[i]
+			break
+		}
+	}
+	if planPhase == nil ||
+		planPhase.StatusRaw != flowstore.PhaseNeedsAttention ||
+		planPhase.LatestLaunchID == nil ||
+		*planPhase.LatestLaunchID != *payload.LaunchID ||
+		planPhase.Outcome != "runtime_start_failed" ||
+		!strings.Contains(planPhase.Notes, "runtime unavailable") {
+		t.Fatalf("payload plan phase = %#v, want recoverable needs_attention phase", planPhase)
 	}
 }
 

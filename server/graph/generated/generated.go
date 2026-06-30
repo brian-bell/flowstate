@@ -38,9 +38,10 @@ type DirectiveRoot struct {
 
 type ComplexityRoot struct {
 	CreateFlowAndLaunchPlanPayload struct {
-		Flow     func(childComplexity int) int
-		Job      func(childComplexity int) int
-		LaunchID func(childComplexity int) int
+		Flow        func(childComplexity int) int
+		Job         func(childComplexity int) int
+		LaunchError func(childComplexity int) int
+		LaunchID    func(childComplexity int) int
 	}
 
 	Flow struct {
@@ -190,6 +191,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.CreateFlowAndLaunchPlanPayload.Job(childComplexity), true
+	case "CreateFlowAndLaunchPlanPayload.launchError":
+		if e.ComplexityRoot.CreateFlowAndLaunchPlanPayload.LaunchError == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CreateFlowAndLaunchPlanPayload.LaunchError(childComplexity), true
 	case "CreateFlowAndLaunchPlanPayload.launchId":
 		if e.ComplexityRoot.CreateFlowAndLaunchPlanPayload.LaunchID == nil {
 			break
@@ -801,6 +808,7 @@ type CreateFlowAndLaunchPlanPayload {
   flow: Flow!
   launchId: ID
   job: RuntimeJob
+  launchError: String!
 }
 
 input LaunchFlowPhaseInput {
@@ -953,6 +961,8 @@ func (ec *executionContext) childFields_CreateFlowAndLaunchPlanPayload(ctx conte
 		return ec.fieldContext_CreateFlowAndLaunchPlanPayload_launchId(ctx, field)
 	case "job":
 		return ec.fieldContext_CreateFlowAndLaunchPlanPayload_job(ctx, field)
+	case "launchError":
+		return ec.fieldContext_CreateFlowAndLaunchPlanPayload_launchError(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type CreateFlowAndLaunchPlanPayload", field.Name)
 }
@@ -1500,6 +1510,29 @@ func (ec *executionContext) fieldContext_CreateFlowAndLaunchPlanPayload_job(_ co
 		},
 	}
 	return fc, nil
+}
+
+func (ec *executionContext) _CreateFlowAndLaunchPlanPayload_launchError(ctx context.Context, field graphql.CollectedField, obj *model.CreateFlowAndLaunchPlanPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_CreateFlowAndLaunchPlanPayload_launchError(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.LaunchError, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_CreateFlowAndLaunchPlanPayload_launchError(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("CreateFlowAndLaunchPlanPayload", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
 func (ec *executionContext) _Flow_id(ctx context.Context, field graphql.CollectedField, obj *model.Flow) (ret graphql.Marshaler) {
@@ -4777,6 +4810,11 @@ func (ec *executionContext) _CreateFlowAndLaunchPlanPayload(ctx context.Context,
 		case "job":
 			out.Values[i] = ec._CreateFlowAndLaunchPlanPayload_job(ctx, field, obj)
 			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "launchError":
+			out.Values[i] = ec._CreateFlowAndLaunchPlanPayload_launchError(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
 		default:
