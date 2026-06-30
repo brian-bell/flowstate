@@ -98,6 +98,15 @@ func (r *mutationResolver) LaunchFlowPhase(ctx context.Context, input model.Laun
 		Context:  launchContext,
 	})
 	if err != nil {
+		if _, updateErr := r.FlowStore.SetPhase(flowstore.PhaseUpdate{
+			FlowID:  record.FlowID,
+			PhaseID: launchContext.FlowPhaseID,
+			Status:  flowstore.PhaseNeedsAttention,
+			Outcome: launchStartFailureOutcome(launchContext.FlowPhaseID),
+			Notes:   "Runtime job failed to start: " + err.Error(),
+		}); updateErr != nil {
+			return nil, fmt.Errorf("runtime job failed to start: %w; additionally failed to mark phase needs_attention: %v", err, updateErr)
+		}
 		return nil, err
 	}
 	return &model.LaunchFlowPhasePayload{
@@ -106,6 +115,13 @@ func (r *mutationResolver) LaunchFlowPhase(ctx context.Context, input model.Laun
 		LaunchID: launchContext.LaunchID,
 		Job:      runtimeJobSnapshotToGraphQL(snapshot),
 	}, nil
+}
+
+func launchStartFailureOutcome(phaseID string) string {
+	if artifacts.NormalizePhaseID(phaseID) == "plan-review" {
+		return flowstore.OutcomeChangesRequested
+	}
+	return "runtime_start_failed"
 }
 
 // CancelRuntimeJob is the resolver for the cancelRuntimeJob field.

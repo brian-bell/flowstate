@@ -927,6 +927,50 @@ func TestHandlerGraphQLLaunchFlowPhaseRejectsInvalidReasoningEffortBeforeStateCh
 	}
 }
 
+func TestHandlerGraphQLLaunchFlowPhaseStartErrorMarksPhaseNeedsAttention(t *testing.T) {
+	store, _ := newFlowGraphQLStore(t)
+	record := createGraphQLFlow(t, store, flowstore.FlowRecord{
+		FlowID:       "start-error-flow",
+		Title:        "Start Error Flow",
+		Instructions: "launch implementation",
+		RepoPath:     t.TempDir(),
+		WorktreePath: t.TempDir(),
+	})
+	record = completeGraphQLPhase(t, store, record.FlowID, "plan", flowstore.PhaseUpdate{Status: flowstore.PhaseCompleted})
+	record = completeGraphQLPhase(t, store, record.FlowID, "plan-review", flowstore.PhaseUpdate{Status: flowstore.PhaseCompleted, Outcome: flowstore.OutcomeApproved})
+	runtime := &startErrorRuntimeProvider{err: errors.New("runtime unavailable")}
+	handler := newFlowGraphQLHandlerWithOptions(t, server.HandlerOptions{
+		FlowStore:         store,
+		RuntimeJobs:       runtime,
+		RuntimeStarter:    runtime,
+		RuntimeController: runtime,
+		AgentCommand:      "codex",
+		StateRoot:         t.TempDir(),
+	})
+
+	var out struct {
+		Data   any   `json:"data"`
+		Errors []any `json:"errors"`
+	}
+	postGraphQL(t, handler, `mutation($input: LaunchFlowPhaseInput!) {
+		launchFlowPhase(input: $input) { launchId }
+	}`, map[string]any{"input": map[string]any{"flowId": record.FlowID, "phaseId": "implementation"}}, &out)
+	if !graphQLErrorsContain(out.Errors, "runtime unavailable") {
+		t.Fatalf("GraphQL errors = %#v, want runtime start failure", out.Errors)
+	}
+	updated, err := store.Read(record.FlowID)
+	if err != nil {
+		t.Fatalf("Read updated flow: %v", err)
+	}
+	phase := phaseByIDForTest(updated, "implementation")
+	if phase.Status != flowstore.PhaseNeedsAttention ||
+		phase.Outcome != "runtime_start_failed" ||
+		!strings.Contains(phase.Notes, "runtime unavailable") ||
+		len(phase.LaunchIDs) != 1 {
+		t.Fatalf("implementation phase after start failure = %#v, want needs_attention with orphan launch noted", phase)
+	}
+}
+
 func TestHandlerGraphQLCancelRuntimeJobStopsJobWithoutPhaseFailure(t *testing.T) {
 	store, _ := newFlowGraphQLStore(t)
 	record := createGraphQLFlow(t, store, flowstore.FlowRecord{
@@ -1232,6 +1276,26 @@ func (failingRuntimeJobLookup) RuntimeStateKnown() bool {
 
 func (failingRuntimeJobLookup) ActiveRuntimeJob(flowstore.FlowRecord, flowstore.FlowPhase) (*flowquery.RuntimeJob, error) {
 	return nil, errors.New("runtime lookup failed")
+}
+
+type startErrorRuntimeProvider struct {
+	err error
+}
+
+func (p *startErrorRuntimeProvider) RuntimeStateKnown() bool {
+	return true
+}
+
+func (p *startErrorRuntimeProvider) ActiveRuntimeJob(flowstore.FlowRecord, flowstore.FlowPhase) (*flowquery.RuntimeJob, error) {
+	return nil, nil
+}
+
+func (p *startErrorRuntimeProvider) Start(context.Context, runtimejobs.StartRequest) (runtimejobs.Snapshot, error) {
+	return runtimejobs.Snapshot{}, p.err
+}
+
+func (p *startErrorRuntimeProvider) Cancel(string) runtimejobs.CancelResult {
+	return runtimejobs.CancelResult{}
 }
 
 const setFlowPhaseStatusMutation = `mutation($input: SetFlowPhaseStatusInput!) {

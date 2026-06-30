@@ -757,8 +757,13 @@ func (s *Store) AddPhaseLaunchID(update PhaseLaunchUpdate) (FlowRecord, error) {
 			return FlowRecord{}, fmt.Errorf("phase %q not found in flow %q", update.PhaseID, update.FlowID)
 		}
 		phase := record.Phases[phaseIndex]
-		if update.RejectRunning && !update.Resume && phase.Status == PhaseRunning {
-			return FlowRecord{}, fmt.Errorf("flow phase %q is already running", update.PhaseID)
+		if update.RejectRunning && !update.Resume {
+			if phase.Status == PhaseRunning {
+				return FlowRecord{}, fmt.Errorf("flow phase %q is already running", update.PhaseID)
+			}
+			if !phaseLaunchableForFreshStart(record, phase) {
+				return FlowRecord{}, fmt.Errorf("flow phase %q is not launchable from status %q", update.PhaseID, phase.Status)
+			}
 		}
 		if update.AutoLaunch {
 			if err := validateAutoPhaseLaunch(record, phase); err != nil {
@@ -806,6 +811,17 @@ func (s *Store) AddPhaseLaunchID(update PhaseLaunchUpdate) (FlowRecord, error) {
 		record.Status = DeriveStatus(record)
 		return record, nil
 	})
+}
+
+func phaseLaunchableForFreshStart(record FlowRecord, phase FlowPhase) bool {
+	phaseID := artifacts.NormalizePhaseID(phase.PhaseID)
+	if phase.Status == PhaseReady {
+		return true
+	}
+	return phaseID == "autoreview" &&
+		(phase.Status == PhaseNeedsAttention || phase.Status == PhaseBlocked) &&
+		HasPRTarget(record.PR) &&
+		PhasePredecessorsSatisfied(record, phase.PhaseID)
 }
 
 func validateAutoPhaseLaunch(record FlowRecord, phase FlowPhase) error {
