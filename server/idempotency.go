@@ -10,6 +10,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/vektah/gqlparser/v2/ast"
+	"github.com/vektah/gqlparser/v2/parser"
 )
 
 const defaultIdempotencyTTL = 10 * time.Minute
@@ -146,7 +149,16 @@ func isGraphQLMutation(body []byte) bool {
 	if err := json.Unmarshal(body, &req); err != nil {
 		return false
 	}
-	return strings.HasPrefix(strings.TrimSpace(req.Query), "mutation")
+	doc, err := parser.ParseQuery(&ast.Source{Input: req.Query})
+	if err != nil {
+		return false
+	}
+	for _, op := range doc.Operations {
+		if op.Operation == ast.Mutation {
+			return true
+		}
+	}
+	return false
 }
 
 func isCacheableGraphQLResponse(response cachedHTTPResponse) bool {

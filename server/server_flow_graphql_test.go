@@ -1361,6 +1361,34 @@ func TestHandlerGraphQLIdempotencyReplaysMutationResponse(t *testing.T) {
 	}
 }
 
+func TestHandlerGraphQLIdempotencyReplaysCommentedMutationResponse(t *testing.T) {
+	store, _ := newFlowGraphQLStore(t)
+	record := createGraphQLFlow(t, store, flowstore.FlowRecord{
+		FlowID:       "idempotent-commented-flow",
+		Title:        "Idempotent Commented Flow",
+		Instructions: "idempotent commented instructions",
+		RepoPath:     t.TempDir(),
+	})
+	spy := &setPhaseCountingStore{Store: store}
+	handler := newFlowGraphQLHandler(t, spy)
+	variables := map[string]any{"input": map[string]any{
+		"flowId":  record.FlowID,
+		"phaseId": "plan",
+		"status":  "COMPLETED",
+	}}
+	query := "# generated client retry-safe operation\n" + setFlowPhaseStatusMutation
+
+	first := postGraphQLRaw(t, handler, query, variables, map[string]string{"Idempotency-Key": "same-key"}, http.StatusOK)
+	second := postGraphQLRaw(t, handler, query, variables, map[string]string{"Idempotency-Key": "same-key"}, http.StatusOK)
+
+	if first != second {
+		t.Fatalf("replayed body differs\nfirst:  %s\nsecond: %s", first, second)
+	}
+	if got := spy.SetPhaseCalls(); got != 1 {
+		t.Fatalf("SetPhase calls = %d, want 1", got)
+	}
+}
+
 func TestHandlerGraphQLIdempotencyReplaysMutationErrors(t *testing.T) {
 	store, _ := newFlowGraphQLStore(t)
 	record := createGraphQLFlow(t, store, flowstore.FlowRecord{
