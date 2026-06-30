@@ -182,6 +182,55 @@ func TestHandlerGraphQLCreateFlowMutationIsAvailable(t *testing.T) {
 	}
 }
 
+func TestHandlerGraphQLCreateFlowIgnoresRuntimeLookupFailureAfterPersist(t *testing.T) {
+	store, _ := newFlowGraphQLStore(t)
+	creator := &staticFlowCreator{
+		record: flowstore.FlowRecord{
+			FlowID:       "created-runtime-fallback",
+			Title:        "Created Flow",
+			Instructions: "create through graphql",
+			RepoPath:     "/dev/alpha",
+			Phases:       []flowstore.FlowPhase{{PhaseID: "plan", Title: "Plan", Status: flowstore.PhaseReady}},
+		},
+	}
+	handler := newFlowGraphQLHandlerWithOptions(t, server.HandlerOptions{
+		FlowStore:    store,
+		FlowCreator:  creator,
+		RuntimeJobs:  failingRuntimeJobLookup{},
+		AgentCommand: "codex",
+	})
+
+	var out struct {
+		Data struct {
+			CreateFlow struct {
+				ID     string `json:"id"`
+				Phases []struct {
+					PhaseID          string `json:"phaseId"`
+					ActiveRuntimeJob *struct {
+						ID string `json:"id"`
+					} `json:"activeRuntimeJob"`
+				} `json:"phases"`
+			} `json:"createFlow"`
+		} `json:"data"`
+		Errors []any `json:"errors"`
+	}
+	postGraphQL(t, handler, `mutation($input: CreateFlowInput!) {
+		createFlow(input: $input) { id phases { phaseId activeRuntimeJob { id } } }
+	}`, map[string]any{"input": map[string]any{
+		"repoPath":     "/dev/alpha",
+		"title":        "Created Flow",
+		"instructions": "create through graphql",
+	}}, &out)
+	if len(out.Errors) != 0 {
+		t.Fatalf("GraphQL errors: %#v", out.Errors)
+	}
+	if out.Data.CreateFlow.ID != "created-runtime-fallback" ||
+		len(out.Data.CreateFlow.Phases) != 1 ||
+		out.Data.CreateFlow.Phases[0].ActiveRuntimeJob != nil {
+		t.Fatalf("createFlow response = %#v, want persisted flow without runtime decoration", out.Data.CreateFlow)
+	}
+}
+
 func TestHandlerGraphQLReadsOneFlowAndHandlesMissingOrInvalidID(t *testing.T) {
 	store, _ := newFlowGraphQLStore(t)
 	record := createGraphQLFlow(t, store, flowstore.FlowRecord{

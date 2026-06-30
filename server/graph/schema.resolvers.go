@@ -42,7 +42,7 @@ func (r *mutationResolver) CreateFlow(ctx context.Context, input model.CreateFlo
 	}
 	view, err := flowquery.BuildWithRuntime(record, r.RuntimeJobs)
 	if err != nil {
-		return nil, err
+		view = flowquery.Build(record)
 	}
 	return flowToGraphQL(view), nil
 }
