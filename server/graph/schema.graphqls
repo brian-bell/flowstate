@@ -7,16 +7,29 @@ scalar Time
 
 type Query {
   health: String!
-  flows(statuses: [FlowStatus!]): [Flow!]!
+  flows(statuses: [FlowStatus!], filter: FlowFilterInput): [Flow!]!
   flow(id: ID!): Flow
+}
+
+input FlowFilterInput {
+  repoPath: String
+  statuses: [FlowStatus!]
 }
 
 type Mutation {
   createFlow(input: CreateFlowInput!): Flow!
   createFlowAndLaunchPlan(input: CreateFlowAndLaunchPlanInput!): CreateFlowAndLaunchPlanPayload!
+  startFlow(input: StartFlowInput!): StartFlowPayload!
   launchFlowPhase(input: LaunchFlowPhaseInput!): LaunchFlowPhasePayload!
   cancelRuntimeJob(id: ID!): RuntimeJob!
   setFlowPhaseStatus(input: SetFlowPhaseStatusInput!): SetFlowPhaseStatusPayload!
+  restartFlowPhase(input: RestartFlowPhaseInput!): RestartFlowPhasePayload!
+  addFlowChildPhase(input: AddFlowChildPhaseInput!): AddFlowChildPhasePayload!
+  setFlowPlanLink(input: SetFlowPlanLinkInput!): SetFlowPlanLinkPayload!
+  setFlowPR(input: SetFlowPRInput!): SetFlowPRPayload!
+  setFlowMerge(input: SetFlowMergeInput!): SetFlowMergePayload!
+  setFlowAutoMode(input: SetFlowAutoModeInput!): SetFlowAutoModePayload!
+  deleteFlow(id: ID!): DeleteFlowPayload!
 }
 
 input CreateFlowInput {
@@ -36,6 +49,23 @@ input CreateFlowAndLaunchPlanInput {
 }
 
 type CreateFlowAndLaunchPlanPayload {
+  flow: Flow!
+  launchId: ID
+  job: RuntimeJob
+  launchError: String!
+}
+
+input StartFlowInput {
+  repoPath: String!
+  title: String!
+  instructions: String!
+  baseRef: String
+  launchPlan: Boolean!
+  agentCommand: String
+  reasoningEffort: String
+}
+
+type StartFlowPayload {
   flow: Flow!
   launchId: ID
   job: RuntimeJob
@@ -68,6 +98,80 @@ input SetFlowPhaseStatusInput {
 type SetFlowPhaseStatusPayload {
   flow: Flow!
   phase: FlowPhase!
+}
+
+input RestartFlowPhaseInput {
+  flowId: ID!
+  phaseId: ID!
+  notes: String
+}
+
+type RestartFlowPhasePayload {
+  flow: Flow!
+  phase: FlowPhase!
+}
+
+input AddFlowChildPhaseInput {
+  flowId: ID!
+  parentPhaseId: ID!
+  phaseId: ID!
+  title: String!
+  order: Int!
+}
+
+type AddFlowChildPhasePayload {
+  flow: Flow!
+  phase: FlowPhase!
+}
+
+input SetFlowPlanLinkInput {
+  flowId: ID!
+  planId: ID!
+  planPath: String!
+}
+
+type SetFlowPlanLinkPayload {
+  flow: Flow!
+}
+
+input SetFlowPRInput {
+  flowId: ID!
+  provider: String!
+  number: Int!
+  url: String!
+  headBranch: String!
+  baseBranch: String!
+  status: String
+}
+
+type SetFlowPRPayload {
+  flow: Flow!
+  pr: PullRequest!
+}
+
+input SetFlowMergeInput {
+  flowId: ID!
+  status: String!
+  commit: String
+  mergedAt: Time
+}
+
+type SetFlowMergePayload {
+  flow: Flow!
+  merge: Merge!
+}
+
+input SetFlowAutoModeInput {
+  flowId: ID!
+  enabled: Boolean!
+}
+
+type SetFlowAutoModePayload {
+  flow: Flow!
+}
+
+type DeleteFlowPayload {
+  deletedId: ID!
 }
 
 enum FlowStatus {
@@ -137,6 +241,8 @@ type FlowPhase {
   outcome: String!
   notes: String!
   summary: String!
+  launchIds: [String!]!
+  sessions: [FlowSession!]!
   latestLaunchId: String
   createdAt: Time!
   updatedAt: Time!
@@ -144,6 +250,16 @@ type FlowPhase {
   launchable: Boolean!
   staleRunningStatus: FlowPhaseStaleRunningStatus
   activeRuntimeJob: RuntimeJob
+}
+
+type FlowSession {
+  provider: String!
+  sessionId: String!
+  launchId: String!
+  status: String!
+  startedAt: Time
+  endedAt: Time
+  transcriptPath: String!
 }
 
 type PullRequest {

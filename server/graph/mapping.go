@@ -1,6 +1,8 @@
 package graph
 
 import (
+	"time"
+
 	"github.com/brian-bell/flowstate/flowstore"
 	"github.com/brian-bell/flowstate/server/flowquery"
 	"github.com/brian-bell/flowstate/server/graph/model"
@@ -47,6 +49,10 @@ func phaseToGraphQL(phase flowquery.Phase) *model.FlowPhase {
 			allowed = append(allowed, *mapped)
 		}
 	}
+	sessions := make([]*model.FlowSession, 0, len(phase.Sessions))
+	for _, session := range phase.Sessions {
+		sessions = append(sessions, sessionToGraphQL(session))
+	}
 	var latestLaunchID *string
 	if phase.LatestLaunchID != "" {
 		latestLaunchID = &phase.LatestLaunchID
@@ -62,6 +68,8 @@ func phaseToGraphQL(phase flowquery.Phase) *model.FlowPhase {
 		Outcome:             phase.Outcome,
 		Notes:               phase.Notes,
 		Summary:             phase.Summary,
+		LaunchIds:           append([]string(nil), phase.LaunchIDs...),
+		Sessions:            sessions,
 		LatestLaunchID:      latestLaunchID,
 		CreatedAt:           phase.CreatedAt,
 		UpdatedAt:           phase.UpdatedAt,
@@ -69,6 +77,26 @@ func phaseToGraphQL(phase flowquery.Phase) *model.FlowPhase {
 		Launchable:          phase.Launchable,
 		StaleRunningStatus:  staleRunningStatusToGraphQL(phase.StaleRunningStatus),
 		ActiveRuntimeJob:    runtimeJobToGraphQL(phase.ActiveRuntimeJob),
+	}
+}
+
+func sessionToGraphQL(session flowstore.Session) *model.FlowSession {
+	var startedAt *time.Time
+	if !session.StartedAt.IsZero() {
+		startedAt = &session.StartedAt
+	}
+	var endedAt *time.Time
+	if !session.EndedAt.IsZero() {
+		endedAt = &session.EndedAt
+	}
+	return &model.FlowSession{
+		Provider:       session.Provider,
+		SessionID:      session.SessionID,
+		LaunchID:       session.LaunchID,
+		Status:         session.Status,
+		StartedAt:      startedAt,
+		EndedAt:        endedAt,
+		TranscriptPath: session.TranscriptPath,
 	}
 }
 

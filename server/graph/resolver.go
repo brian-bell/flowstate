@@ -6,18 +6,13 @@ import (
 	"context"
 
 	"github.com/brian-bell/flowstate/flowlaunch"
+	"github.com/brian-bell/flowstate/flowrepo"
 	"github.com/brian-bell/flowstate/flowstore"
 	"github.com/brian-bell/flowstate/server/flowquery"
 	"github.com/brian-bell/flowstate/server/runtimejobs"
 )
 
-type FlowStore interface {
-	List(flowstore.FlowFilter) ([]flowstore.FlowRecord, error)
-	Read(string) (flowstore.FlowRecord, error)
-	AddPhaseLaunchID(flowstore.PhaseLaunchUpdate) (flowstore.FlowRecord, error)
-	ResetAwaitingSessionPhase(flowstore.PhaseResetUpdate) (flowstore.FlowRecord, error)
-	SetPhase(flowstore.PhaseUpdate) (flowstore.FlowRecord, error)
-}
+type FlowStore = flowrepo.FlowRepository
 
 type CreateFlowInput struct {
 	RepoPath     string

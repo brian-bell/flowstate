@@ -25,6 +25,7 @@ import (
 	"github.com/99designs/gqlgen/graphql/handler/transport"
 	"github.com/brian-bell/flowstate/actions"
 	"github.com/brian-bell/flowstate/flowlaunch"
+	"github.com/brian-bell/flowstate/flowrepo"
 	"github.com/brian-bell/flowstate/flowstore"
 	"github.com/brian-bell/flowstate/internal/daemoncoords"
 	"github.com/brian-bell/flowstate/internal/version"
@@ -68,6 +69,7 @@ type HandlerOptions struct {
 	RuntimeJobs           flowquery.RuntimeJobLookup
 	RuntimeStarter        graph.RuntimeStarter
 	RuntimeController     graph.RuntimeController
+	Idempotency           *IdempotencyCache
 	AgentCommand          string
 	CodexReasoningEffort  string
 	ClaudeReasoningEffort string
@@ -103,14 +105,7 @@ type FlowReader interface {
 	Read(string) (flowstore.FlowRecord, error)
 }
 
-type FlowStore interface {
-	FlowReader
-	Create(flowstore.FlowRecord) (flowstore.FlowRecord, error)
-	SetStartMetadata(flowstore.StartMetadataUpdate) (flowstore.FlowRecord, error)
-	AddPhaseLaunchID(flowstore.PhaseLaunchUpdate) (flowstore.FlowRecord, error)
-	ResetAwaitingSessionPhase(flowstore.PhaseResetUpdate) (flowstore.FlowRecord, error)
-	SetPhase(flowstore.PhaseUpdate) (flowstore.FlowRecord, error)
-}
+type FlowStore = flowrepo.FlowRepository
 
 type readOnlyFlowStore struct {
 	FlowReader
@@ -120,7 +115,39 @@ func (s readOnlyFlowStore) AddPhaseLaunchID(flowstore.PhaseLaunchUpdate) (flowst
 	return flowstore.FlowRecord{}, fmt.Errorf("flow store is read-only")
 }
 
+func (s readOnlyFlowStore) AddChildPhase(flowstore.ChildPhaseUpdate) (flowstore.FlowRecord, error) {
+	return flowstore.FlowRecord{}, fmt.Errorf("flow store is read-only")
+}
+
+func (s readOnlyFlowStore) AttachSession(flowstore.SessionAttachUpdate) (flowstore.FlowRecord, error) {
+	return flowstore.FlowRecord{}, fmt.Errorf("flow store is read-only")
+}
+
 func (s readOnlyFlowStore) Create(flowstore.FlowRecord) (flowstore.FlowRecord, error) {
+	return flowstore.FlowRecord{}, fmt.Errorf("flow store is read-only")
+}
+
+func (s readOnlyFlowStore) Delete(string) error {
+	return fmt.Errorf("flow store is read-only")
+}
+
+func (s readOnlyFlowStore) RestartPhase(flowstore.PhaseRestartUpdate) (flowstore.FlowRecord, error) {
+	return flowstore.FlowRecord{}, fmt.Errorf("flow store is read-only")
+}
+
+func (s readOnlyFlowStore) SetAutoMode(flowstore.AutoModeUpdate) (flowstore.FlowRecord, error) {
+	return flowstore.FlowRecord{}, fmt.Errorf("flow store is read-only")
+}
+
+func (s readOnlyFlowStore) SetMerge(flowstore.MergeUpdate) (flowstore.FlowRecord, error) {
+	return flowstore.FlowRecord{}, fmt.Errorf("flow store is read-only")
+}
+
+func (s readOnlyFlowStore) SetPlanLink(flowstore.PlanLinkUpdate) (flowstore.FlowRecord, error) {
+	return flowstore.FlowRecord{}, fmt.Errorf("flow store is read-only")
+}
+
+func (s readOnlyFlowStore) SetPR(flowstore.PRUpdate) (flowstore.FlowRecord, error) {
 	return flowstore.FlowRecord{}, fmt.Errorf("flow store is read-only")
 }
 
@@ -464,7 +491,11 @@ func NewHandler(opts HandlerOptions) (http.Handler, error) {
 		StateRoot:             opts.StateRoot,
 	}}))
 	graphqlHandler.AddTransport(transport.POST{})
-	mux.Handle("/graphql", requireBearerToken(opts.Token, graphqlHandler))
+	idempotency := opts.Idempotency
+	if idempotency == nil {
+		idempotency = NewIdempotencyCache(IdempotencyOptions{})
+	}
+	mux.Handle("/graphql", requireBearerToken(opts.Token, withIdempotency(graphqlHandler, idempotency)))
 	mux.Handle("/", newStaticSPAHandler(staticAssets, spaShell))
 	return requireAllowedHost(opts, requireAllowedOrigin(opts, mux)), nil
 }
