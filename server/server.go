@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"os"
 	"path"
 	"reflect"
 	"strconv"
@@ -25,6 +26,8 @@ import (
 	"github.com/brian-bell/flowstate/actions"
 	"github.com/brian-bell/flowstate/flowlaunch"
 	"github.com/brian-bell/flowstate/flowstore"
+	"github.com/brian-bell/flowstate/internal/daemoncoords"
+	"github.com/brian-bell/flowstate/internal/version"
 	"github.com/brian-bell/flowstate/server/flowcreate"
 	"github.com/brian-bell/flowstate/server/flowquery"
 	"github.com/brian-bell/flowstate/server/graph"
@@ -38,8 +41,23 @@ var schemaGraphQL string
 
 const DefaultSPAShell = "_shell.html"
 
+// AllowedEndpoint describes one host:port the handler will serve, plus any
+// additional hostnames (aliases) that resolve to that same endpoint. Aliases are
+// scoped to their endpoint only, so a loopback alias never admits a Tailscale
+// port and vice versa.
+type AllowedEndpoint struct {
+	Host    string
+	Port    string
+	Aliases []string
+}
+
 type HandlerOptions struct {
-	Token                 string
+	Token string
+	// AllowedEndpoints, when non-empty, is the authoritative host/port allowlist
+	// populated from the actual bound listeners. When empty, the handler falls
+	// back to the single endpoint described by ListenerHost/ListenerPort/Scope/
+	// AllowIPv6Alias.
+	AllowedEndpoints      []AllowedEndpoint
 	ListenerHost          string
 	ListenerPort          string
 	Scope                 ListenerScope
@@ -72,6 +90,7 @@ type Options struct {
 	FlowPromptTemplates   flowlaunch.PromptTemplates
 	BootstrapHookForRepo  func(string) (actions.BootstrapHook, bool)
 	RunBootstrapHook      func(actions.BootstrapContext, actions.BootstrapHook) error
+	PublishCoords         bool
 	Stdout                io.Writer
 	Started               chan<- Started
 
@@ -168,23 +187,20 @@ func Run(ctx context.Context, opts Options) error {
 	if opts.listen != nil {
 		listen = opts.listen
 	}
-	listener, err := listen("tcp", resolvedListen.Listen)
+	bound, loopbackURL, err := bindListeners(resolvedListen, listen)
 	if err != nil {
 		return err
 	}
-	defer listener.Close()
+	defer closeBoundListeners(bound)
 
-	listenerHost, listenerPort, err := validatedListenerAddr(listener.Addr(), resolvedListen)
-	if err != nil {
-		return err
+	endpoints := make([]AllowedEndpoint, len(bound))
+	for i, b := range bound {
+		endpoints[i] = b.endpoint
 	}
 	handler, err := NewHandler(HandlerOptions{
-		Token:          token,
-		ListenerHost:   listenerHost,
-		ListenerPort:   listenerPort,
-		Scope:          resolvedListen.Scope,
-		AllowIPv6Alias: resolvedListen.Scope == ListenerScopeLoopback && listenerHost == "::1",
-		FlowStore:      flowStore,
+		Token:            token,
+		AllowedEndpoints: endpoints,
+		FlowStore:        flowStore,
 		FlowCreator: flowcreate.New(flowcreate.Options{
 			Store:                flowStore,
 			BootstrapHookForRepo: opts.BootstrapHookForRepo,
@@ -203,20 +219,43 @@ func Run(ctx context.Context, opts Options) error {
 		return err
 	}
 
-	server := &http.Server{Handler: handler}
-	serveErr := make(chan error, 1)
-	go func() {
-		err := server.Serve(listener)
-		if errors.Is(err, http.ErrServerClosed) {
-			err = nil
-		}
-		serveErr <- err
-	}()
-
 	started := Started{
-		URL:   "http://" + net.JoinHostPort(listenerHost, listenerPort),
+		URL:   loopbackURL,
 		Token: token,
 	}
+
+	// Publish discovery coords only after every listener has bound and the
+	// loopback URL is known. A publish failure is a startup failure: clients
+	// would otherwise discover stale or missing daemon metadata, so close the
+	// listeners and return before reporting the daemon as started.
+	if opts.PublishCoords {
+		publishedCoords := daemoncoords.Coords{
+			URL:     started.URL,
+			Token:   token,
+			PID:     os.Getpid(),
+			Version: version.String(),
+		}
+		if err := daemoncoords.Write(publishedCoords); err != nil {
+			return fmt.Errorf("publish daemon coords: %w", err)
+		}
+		defer func() {
+			_ = daemoncoords.RemoveIfMatches(publishedCoords)
+		}()
+	}
+
+	httpServer := &http.Server{Handler: handler}
+	serveResults := make(chan error, len(bound))
+	for _, b := range bound {
+		listener := b.listener
+		go func() {
+			err := httpServer.Serve(listener)
+			if errors.Is(err, http.ErrServerClosed) {
+				err = nil
+			}
+			serveResults <- err
+		}()
+	}
+
 	if opts.Stdout != nil {
 		fmt.Fprintf(opts.Stdout, "URL: %s\nToken: %s\n", started.URL, started.Token)
 	}
@@ -228,24 +267,135 @@ func Run(ctx context.Context, opts Options) error {
 	}
 
 	select {
-	case err := <-serveErr:
-		return err
-	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := server.Shutdown(shutdownCtx); err != nil {
+	case err := <-serveResults:
+		// A serve goroutine returned first. Shut the rest down, wait for every
+		// goroutine, and return the first real error; secondary close errors are
+		// ignored.
+		shutErr := shutdownServer(httpServer)
+		drainServeResults(serveResults, len(bound)-1)
+		if err != nil {
 			return err
 		}
-		return <-serveErr
+		return shutErr
+	case <-ctx.Done():
+		shutErr := shutdownServer(httpServer)
+		if serveErr := firstServeError(serveResults, len(bound)); serveErr != nil {
+			return serveErr
+		}
+		return shutErr
 	}
+}
+
+func shutdownServer(httpServer *http.Server) error {
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return httpServer.Shutdown(shutdownCtx)
+}
+
+func drainServeResults(results <-chan error, count int) {
+	for i := 0; i < count; i++ {
+		<-results
+	}
+}
+
+func firstServeError(results <-chan error, count int) error {
+	var firstErr error
+	for i := 0; i < count; i++ {
+		if err := <-results; err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+type boundListener struct {
+	listener net.Listener
+	endpoint AllowedEndpoint
+}
+
+// bindListeners binds the listeners required by resolved and returns them
+// alongside the loopback URL that clients and discovery coords should advertise.
+// Loopback scope binds a single loopback listener; Tailscale scope additionally
+// binds a loopback listener so the daemon stays reachable locally and the
+// advertised URL remains loopback.
+func bindListeners(resolved ResolvedListen, listen func(network string, address string) (net.Listener, error)) ([]boundListener, string, error) {
+	if resolved.Scope == ListenerScopeTailscale {
+		return bindTailscaleListeners(resolved, listen)
+	}
+	return bindLoopbackListeners(resolved, listen)
+}
+
+func bindLoopbackListeners(resolved ResolvedListen, listen func(network string, address string) (net.Listener, error)) ([]boundListener, string, error) {
+	listener, err := listen("tcp", resolved.Listen)
+	if err != nil {
+		return nil, "", err
+	}
+	host, port, err := validatedListenerAddr(listener.Addr(), resolved)
+	if err != nil {
+		listener.Close()
+		return nil, "", err
+	}
+	bound := []boundListener{{listener: listener, endpoint: loopbackEndpoint(host, port)}}
+	return bound, loopbackURL(host, port), nil
+}
+
+func bindTailscaleListeners(resolved ResolvedListen, listen func(network string, address string) (net.Listener, error)) ([]boundListener, string, error) {
+	bound, url, err := bindLoopbackListeners(ResolvedListen{
+		Listen: defaultListenAddress,
+		Host:   "127.0.0.1",
+		Port:   "0",
+		Scope:  ListenerScopeLoopback,
+	}, listen)
+	if err != nil {
+		return nil, "", err
+	}
+	tailscaleListener, err := listen("tcp", resolved.Listen)
+	if err != nil {
+		closeBoundListeners(bound)
+		return nil, "", err
+	}
+	host, port, err := validatedListenerAddr(tailscaleListener.Addr(), resolved)
+	if err != nil {
+		tailscaleListener.Close()
+		closeBoundListeners(bound)
+		return nil, "", err
+	}
+	bound = append(bound, boundListener{
+		listener: tailscaleListener,
+		endpoint: AllowedEndpoint{Host: host, Port: port},
+	})
+	return bound, url, nil
+}
+
+func closeBoundListeners(bound []boundListener) {
+	for _, b := range bound {
+		b.listener.Close()
+	}
+}
+
+func loopbackEndpoint(host, port string) AllowedEndpoint {
+	aliases := []string{"localhost", "127.0.0.1"}
+	if host == "::1" {
+		aliases = append(aliases, "::1")
+	}
+	return AllowedEndpoint{Host: host, Port: port, Aliases: aliases}
+}
+
+func loopbackURL(host, port string) string {
+	return "http://" + net.JoinHostPort(host, port)
 }
 
 func NewHandler(opts HandlerOptions) (http.Handler, error) {
 	if opts.Token == "" {
 		return nil, errors.New("token is required")
 	}
-	if opts.ListenerHost == "" || opts.ListenerPort == "" {
+	if len(opts.AllowedEndpoints) == 0 && (opts.ListenerHost == "" || opts.ListenerPort == "") {
 		return nil, errors.New("listener host and port are required")
+	}
+	for _, endpoint := range opts.AllowedEndpoints {
+		if endpoint.Host == "" || endpoint.Port == "" {
+			return nil, errors.New("allowed endpoint host and port are required")
+		}
 	}
 	staticAssets, spaShell, err := staticAssetOptions(opts)
 	if err != nil {
@@ -533,10 +683,10 @@ func requireBearerToken(token string, next http.Handler) http.Handler {
 }
 
 func requireAllowedHost(opts HandlerOptions, next http.Handler) http.Handler {
-	allowedHosts := allowedLoopbackHosts(opts)
+	endpoints := resolvedEndpoints(opts)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		host, port, err := net.SplitHostPort(r.Host)
-		if err != nil || port != opts.ListenerPort || !allowedHosts[host] {
+		if err != nil || !endpointAllowsHost(endpoints, host, port) {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
@@ -545,14 +695,14 @@ func requireAllowedHost(opts HandlerOptions, next http.Handler) http.Handler {
 }
 
 func requireAllowedOrigin(opts HandlerOptions, next http.Handler) http.Handler {
-	allowedHosts := allowedLoopbackHosts(opts)
+	endpoints := resolvedEndpoints(opts)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origins := r.Header.Values("Origin")
 		if len(origins) == 0 {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if len(origins) != 1 || !isAllowedOrigin(origins[0], opts.ListenerPort, allowedHosts) {
+		if len(origins) != 1 || !isAllowedOrigin(origins[0], endpoints) {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
@@ -560,25 +710,48 @@ func requireAllowedOrigin(opts HandlerOptions, next http.Handler) http.Handler {
 	})
 }
 
-func isAllowedOrigin(origin string, port string, allowedHosts map[string]bool) bool {
+func isAllowedOrigin(origin string, endpoints []AllowedEndpoint) bool {
 	u, err := url.Parse(origin)
 	if err != nil || u.Scheme != "http" || u.Host == "" || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
 		return false
 	}
-	return u.Port() == port && allowedHosts[u.Hostname()]
+	return endpointAllowsHost(endpoints, u.Hostname(), u.Port())
 }
 
-func allowedLoopbackHosts(opts HandlerOptions) map[string]bool {
+// resolvedEndpoints returns the explicit endpoint allowlist when present, or a
+// single-endpoint fallback derived from the legacy ListenerHost/ListenerPort/
+// Scope/AllowIPv6Alias fields.
+func resolvedEndpoints(opts HandlerOptions) []AllowedEndpoint {
+	if len(opts.AllowedEndpoints) > 0 {
+		return opts.AllowedEndpoints
+	}
 	if opts.Scope == ListenerScopeTailscale {
-		return map[string]bool{opts.ListenerHost: true}
+		return []AllowedEndpoint{{Host: opts.ListenerHost, Port: opts.ListenerPort}}
 	}
-	allowedHosts := map[string]bool{
-		"localhost":       true,
-		"127.0.0.1":       true,
-		opts.ListenerHost: true,
-	}
+	aliases := []string{"localhost", "127.0.0.1"}
 	if opts.AllowIPv6Alias {
-		allowedHosts["::1"] = true
+		aliases = append(aliases, "::1")
 	}
-	return allowedHosts
+	return []AllowedEndpoint{{Host: opts.ListenerHost, Port: opts.ListenerPort, Aliases: aliases}}
+}
+
+// endpointAllowsHost reports whether host:port matches one allowed endpoint
+// exactly. Aliases are checked only against their own endpoint's port, so a
+// loopback alias never admits a Tailscale port and a Tailscale host never
+// admits a loopback port.
+func endpointAllowsHost(endpoints []AllowedEndpoint, host, port string) bool {
+	for _, endpoint := range endpoints {
+		if endpoint.Port != port {
+			continue
+		}
+		if host == endpoint.Host {
+			return true
+		}
+		for _, alias := range endpoint.Aliases {
+			if host == alias {
+				return true
+			}
+		}
+	}
+	return false
 }

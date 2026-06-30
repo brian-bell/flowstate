@@ -304,6 +304,7 @@ func runServe(args []string, deps runDeps) error {
 		},
 		BootstrapHookForRepo: bootstrapHookResolver(cfg),
 		RunBootstrapHook:     actions.RunBootstrapHook,
+		PublishCoords:        true,
 		Stdout:               deps.stdout,
 	}); err != nil {
 		return fmt.Errorf("serve: %w", err)

@@ -208,6 +208,36 @@ func TestRunServeLoadsConfigForStateRootButBypassesScanAndTUI(t *testing.T) {
 	}
 }
 
+func TestRunServePublishesDaemonCoords(t *testing.T) {
+	var got serveOptions
+	err := run([]string{"wtui", "serve"}, runDeps{
+		loadConfig: func() (config.Config, error) {
+			return config.Config{
+				Sessions: config.SessionsConfig{Root: filepath.Join(t.TempDir(), "state")},
+			}, nil
+		},
+		scan: func(scanner.ScanOptions) ([]scanner.Repo, error) {
+			t.Fatal("scan should not run for serve")
+			return nil, nil
+		},
+		startProgram: func([]scanner.Repo, config.Config) error {
+			t.Fatal("program should not start for serve")
+			return nil
+		},
+		serve: func(_ context.Context, opts serveOptions) error {
+			got = opts
+			return nil
+		},
+		stdout: &bytes.Buffer{},
+	})
+	if err != nil {
+		t.Fatalf("run returned error: %v", err)
+	}
+	if !got.PublishCoords {
+		t.Fatal("serve options PublishCoords = false, want true so the daemon publishes discovery data")
+	}
+}
+
 func TestRunServePassesBootstrapHookConfig(t *testing.T) {
 	var got serveOptions
 	repoPath := filepath.Join(t.TempDir(), "repo")
