@@ -19,6 +19,7 @@ import (
 	"github.com/brian-bell/flowstate/flowstore"
 	"github.com/brian-bell/flowstate/planstore"
 	"github.com/brian-bell/flowstate/server"
+	"github.com/brian-bell/flowstate/server/flowcreate"
 	"github.com/brian-bell/flowstate/server/flowquery"
 	"github.com/brian-bell/flowstate/server/graph"
 	"github.com/brian-bell/flowstate/server/runtimejobs"
@@ -228,6 +229,424 @@ func TestHandlerGraphQLCreateFlowIgnoresRuntimeLookupFailureAfterPersist(t *test
 		len(out.Data.CreateFlow.Phases) != 1 ||
 		out.Data.CreateFlow.Phases[0].ActiveRuntimeJob != nil {
 		t.Fatalf("createFlow response = %#v, want persisted flow without runtime decoration", out.Data.CreateFlow)
+	}
+}
+
+func TestHandlerGraphQLCreateFlowAndLaunchPlanCreatesFlowAndStartsRuntimeJob(t *testing.T) {
+	store, _ := newFlowGraphQLStore(t)
+	repoPath := t.TempDir()
+	worktreePath := filepath.Join(t.TempDir(), "created-flow")
+	runtime := &capturingRuntimeProvider{
+		now: time.Date(2026, 6, 30, 12, 0, 0, 0, time.UTC),
+	}
+	handler := newFlowGraphQLHandlerWithOptions(t, server.HandlerOptions{
+		FlowStore: store,
+		FlowCreator: flowcreate.New(flowcreate.Options{
+			Store: store,
+			CreateWorktree: func(repoPath, title, baseRef string) (actions.FlowWorktreeCreateResult, error) {
+				if repoPath == "" || title != "Created Flow" || baseRef != "main" {
+					t.Fatalf("CreateWorktree(%q, %q, %q), want repo/title/main", repoPath, title, baseRef)
+				}
+				return actions.FlowWorktreeCreateResult{WorktreePath: worktreePath, Branch: "flow/created-flow"}, nil
+			},
+			ResolveCommit: func(path string) string {
+				if path != worktreePath {
+					t.Fatalf("ResolveCommit(%q), want %q", path, worktreePath)
+				}
+				return "abc123"
+			},
+		}),
+		RuntimeJobs:          runtime,
+		RuntimeStarter:       runtime,
+		AgentCommand:         "codex",
+		CodexReasoningEffort: "high",
+		StateRoot:            t.TempDir(),
+	})
+
+	var out struct {
+		Data struct {
+			CreateFlowAndLaunchPlan struct {
+				Flow struct {
+					ID           string `json:"id"`
+					RepoPath     string `json:"repoPath"`
+					WorktreePath string `json:"worktreePath"`
+					Branch       string `json:"branch"`
+					Commit       string `json:"commit"`
+					Phases       []struct {
+						PhaseID          string `json:"phaseId"`
+						StatusRaw        string `json:"statusRaw"`
+						LatestLaunchID   string `json:"latestLaunchId"`
+						ActiveRuntimeJob *struct {
+							ID       string `json:"id"`
+							Status   string `json:"status"`
+							LaunchID string `json:"launchId"`
+						} `json:"activeRuntimeJob"`
+					} `json:"phases"`
+				} `json:"flow"`
+				LaunchID string `json:"launchId"`
+				Job      struct {
+					ID        string `json:"id"`
+					FlowID    string `json:"flowId"`
+					PhaseID   string `json:"phaseId"`
+					LaunchID  string `json:"launchId"`
+					Status    string `json:"status"`
+					CreatedAt string `json:"createdAt"`
+				} `json:"job"`
+			} `json:"createFlowAndLaunchPlan"`
+		} `json:"data"`
+		Errors []any `json:"errors"`
+	}
+	postGraphQL(t, handler, `mutation($input: CreateFlowAndLaunchPlanInput!) {
+		createFlowAndLaunchPlan(input: $input) {
+			flow {
+				id
+				repoPath
+				worktreePath
+				branch
+				commit
+				phases {
+					phaseId
+					statusRaw
+					latestLaunchId
+					activeRuntimeJob { id status launchId }
+				}
+			}
+			launchId
+			job { id flowId phaseId launchId status createdAt }
+		}
+	}`, map[string]any{"input": map[string]any{
+		"repoPath":        repoPath,
+		"title":           "Created Flow",
+		"instructions":    "Write the plan",
+		"baseRef":         "main",
+		"reasoningEffort": "medium",
+	}}, &out)
+	if len(out.Errors) != 0 {
+		t.Fatalf("GraphQL errors: %#v", out.Errors)
+	}
+	payload := out.Data.CreateFlowAndLaunchPlan
+	if payload.Flow.ID == "" ||
+		payload.Flow.RepoPath != repoPath ||
+		payload.Flow.WorktreePath != worktreePath ||
+		payload.Flow.Branch != "flow/created-flow" ||
+		payload.Flow.Commit != "abc123" {
+		t.Fatalf("flow payload = %#v, want created flow metadata", payload.Flow)
+	}
+	if payload.LaunchID == "" ||
+		payload.Job.ID == "" ||
+		payload.Job.FlowID != payload.Flow.ID ||
+		payload.Job.PhaseID != "plan" ||
+		payload.Job.LaunchID != payload.LaunchID ||
+		payload.Job.Status != string(runtimejobs.StatusQueued) {
+		t.Fatalf("launch payload = %#v, want queued plan job with launch ID", payload)
+	}
+	var planPhase *struct {
+		PhaseID          string `json:"phaseId"`
+		StatusRaw        string `json:"statusRaw"`
+		LatestLaunchID   string `json:"latestLaunchId"`
+		ActiveRuntimeJob *struct {
+			ID       string `json:"id"`
+			Status   string `json:"status"`
+			LaunchID string `json:"launchId"`
+		} `json:"activeRuntimeJob"`
+	}
+	for i := range payload.Flow.Phases {
+		if payload.Flow.Phases[i].PhaseID == "plan" {
+			planPhase = &payload.Flow.Phases[i]
+			break
+		}
+	}
+	if planPhase == nil ||
+		planPhase.StatusRaw != flowstore.PhaseRunning ||
+		planPhase.LatestLaunchID != payload.LaunchID ||
+		planPhase.ActiveRuntimeJob == nil ||
+		planPhase.ActiveRuntimeJob.ID != payload.Job.ID ||
+		planPhase.ActiveRuntimeJob.LaunchID != payload.LaunchID {
+		t.Fatalf("plan phase payload = %#v, want running phase with active runtime job", planPhase)
+	}
+	updated, err := store.Read(payload.Flow.ID)
+	if err != nil {
+		t.Fatalf("Read created flow: %v", err)
+	}
+	if phase := phaseByIDForTest(updated, "plan"); phase.Status != flowstore.PhaseRunning || flowstore.LatestPhaseLaunchID(phase) != payload.LaunchID {
+		t.Fatalf("persisted plan phase = %#v, want running with launch ID %q", phase, payload.LaunchID)
+	}
+	if len(runtime.requests) != 1 {
+		t.Fatalf("runtime requests = %#v, want one", runtime.requests)
+	}
+	req := runtime.requests[0]
+	if req.FlowID != payload.Flow.ID ||
+		req.PhaseID != "plan" ||
+		req.LaunchID != payload.LaunchID ||
+		req.Context.FlowID != payload.Flow.ID ||
+		req.Context.FlowPhaseID != "plan" ||
+		req.Context.LaunchID != payload.LaunchID ||
+		req.Context.RepoPath != repoPath ||
+		req.Context.WorktreePath != worktreePath ||
+		req.Context.Branch != "flow/created-flow" ||
+		req.Context.Commit != "abc123" ||
+		req.Context.Command != "codex" ||
+		req.Context.ReasoningEffort != "medium" ||
+		!req.Context.Headless ||
+		req.Context.Embedded ||
+		!req.Context.FlowLaunchTracked ||
+		!strings.Contains(req.Context.InitialPrompt, "Write the plan") ||
+		!strings.Contains(req.Context.InitialPrompt, "Produce a plan only; do not start coding in this phase.") ||
+		!strings.Contains(req.Context.InitialPrompt, "After completing this phase goal, mark this Flow phase done with flowstate.") {
+		t.Fatalf("runtime request = %#v, want headless tracked plan launch context", req)
+	}
+}
+
+func TestHandlerGraphQLCreateFlowAndLaunchPlanRejectsInvalidAgentBeforeCreate(t *testing.T) {
+	tests := []struct {
+		name         string
+		defaultAgent string
+		input        map[string]any
+		wantError    string
+	}{
+		{
+			name:         "codex-app",
+			defaultAgent: "codex",
+			input:        map[string]any{"agentCommand": "codex-app"},
+			wantError:    "codex-app cannot be launched as a server runtime job",
+		},
+		{
+			name:         "invalid command",
+			defaultAgent: "codex",
+			input:        map[string]any{"agentCommand": "vim"},
+			wantError:    `unsupported agent "vim"`,
+		},
+		{
+			name:      "missing command",
+			input:     map[string]any{},
+			wantError: "agent command is required",
+		},
+		{
+			name:         "invalid reasoning effort",
+			defaultAgent: "codex",
+			input:        map[string]any{"reasoningEffort": "turbo"},
+			wantError:    `unsupported reasoning effort "turbo" for codex`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store, _ := newFlowGraphQLStore(t)
+			creator := &staticFlowCreator{record: flowstore.FlowRecord{FlowID: "should-not-create"}}
+			runtime := &capturingRuntimeProvider{}
+			handler := newFlowGraphQLHandlerWithOptions(t, server.HandlerOptions{
+				FlowStore:      store,
+				FlowCreator:    creator,
+				RuntimeJobs:    runtime,
+				RuntimeStarter: runtime,
+				AgentCommand:   tt.defaultAgent,
+			})
+
+			input := map[string]any{
+				"repoPath":     t.TempDir(),
+				"title":        "Invalid Agent",
+				"instructions": "do not create",
+			}
+			for key, value := range tt.input {
+				input[key] = value
+			}
+			var out struct {
+				Data   any   `json:"data"`
+				Errors []any `json:"errors"`
+			}
+			postGraphQL(t, handler, `mutation($input: CreateFlowAndLaunchPlanInput!) {
+				createFlowAndLaunchPlan(input: $input) { launchId }
+			}`, map[string]any{"input": input}, &out)
+			if !graphQLErrorsContain(out.Errors, tt.wantError) {
+				t.Fatalf("GraphQL errors = %#v, want %q", out.Errors, tt.wantError)
+			}
+			if creator.called {
+				t.Fatal("flow creator was called for invalid launch settings")
+			}
+			if len(runtime.requests) != 0 {
+				t.Fatalf("runtime requests = %#v, want none", runtime.requests)
+			}
+			records, err := store.List(flowstore.FlowFilter{})
+			if err != nil {
+				t.Fatalf("List flows: %v", err)
+			}
+			if len(records) != 0 {
+				t.Fatalf("records = %#v, want no created flows", records)
+			}
+		})
+	}
+}
+
+func TestHandlerGraphQLCreateFlowAndLaunchPlanReturnsBlockedFlowWithoutRuntimeJob(t *testing.T) {
+	store, _ := newFlowGraphQLStore(t)
+	runtime := &capturingRuntimeProvider{}
+	handler := newFlowGraphQLHandlerWithOptions(t, server.HandlerOptions{
+		FlowStore: store,
+		FlowCreator: flowcreate.New(flowcreate.Options{
+			Store: store,
+			CreateWorktree: func(repoPath, title, baseRef string) (actions.FlowWorktreeCreateResult, error) {
+				return actions.FlowWorktreeCreateResult{}, errors.New("disk full")
+			},
+		}),
+		RuntimeJobs:    runtime,
+		RuntimeStarter: runtime,
+		AgentCommand:   "codex",
+		StateRoot:      t.TempDir(),
+	})
+
+	var out struct {
+		Data struct {
+			CreateFlowAndLaunchPlan struct {
+				Flow struct {
+					ID     string `json:"id"`
+					Phases []struct {
+						PhaseID   string `json:"phaseId"`
+						StatusRaw string `json:"statusRaw"`
+						Notes     string `json:"notes"`
+					} `json:"phases"`
+				} `json:"flow"`
+				LaunchID *string `json:"launchId"`
+				Job      *struct {
+					ID string `json:"id"`
+				} `json:"job"`
+			} `json:"createFlowAndLaunchPlan"`
+		} `json:"data"`
+		Errors []any `json:"errors"`
+	}
+	postGraphQL(t, handler, `mutation($input: CreateFlowAndLaunchPlanInput!) {
+		createFlowAndLaunchPlan(input: $input) {
+			flow { id phases { phaseId statusRaw notes } }
+			launchId
+			job { id }
+		}
+	}`, map[string]any{"input": map[string]any{
+		"repoPath":     t.TempDir(),
+		"title":        "Blocked Flow",
+		"instructions": "create blocked flow",
+	}}, &out)
+	if len(out.Errors) != 0 {
+		t.Fatalf("GraphQL errors: %#v", out.Errors)
+	}
+	payload := out.Data.CreateFlowAndLaunchPlan
+	if payload.Flow.ID == "" || payload.LaunchID != nil || payload.Job != nil {
+		t.Fatalf("payload = %#v, want blocked flow without launch/job", payload)
+	}
+	var planPhase *struct {
+		PhaseID   string `json:"phaseId"`
+		StatusRaw string `json:"statusRaw"`
+		Notes     string `json:"notes"`
+	}
+	for i := range payload.Flow.Phases {
+		if payload.Flow.Phases[i].PhaseID == "plan" {
+			planPhase = &payload.Flow.Phases[i]
+			break
+		}
+	}
+	if planPhase == nil || planPhase.StatusRaw != flowstore.PhaseBlocked || !strings.Contains(planPhase.Notes, "Worktree creation failed: disk full") {
+		t.Fatalf("plan phase = %#v, want worktree failure blocked state", planPhase)
+	}
+	if len(runtime.requests) != 0 {
+		t.Fatalf("runtime requests = %#v, want none", runtime.requests)
+	}
+}
+
+func TestHandlerGraphQLCreateFlowAndLaunchPlanStartErrorMarksPlanNeedsAttention(t *testing.T) {
+	store, _ := newFlowGraphQLStore(t)
+	worktreePath := filepath.Join(t.TempDir(), "created-flow")
+	runtime := &startErrorRuntimeProvider{err: errors.New("runtime unavailable")}
+	handler := newFlowGraphQLHandlerWithOptions(t, server.HandlerOptions{
+		FlowStore: store,
+		FlowCreator: flowcreate.New(flowcreate.Options{
+			Store: store,
+			CreateWorktree: func(repoPath, title, baseRef string) (actions.FlowWorktreeCreateResult, error) {
+				return actions.FlowWorktreeCreateResult{WorktreePath: worktreePath, Branch: "flow/created-flow"}, nil
+			},
+			ResolveCommit: func(path string) string { return "abc123" },
+		}),
+		RuntimeJobs:       runtime,
+		RuntimeStarter:    runtime,
+		RuntimeController: runtime,
+		AgentCommand:      "codex",
+		StateRoot:         t.TempDir(),
+	})
+
+	var out struct {
+		Data struct {
+			CreateFlowAndLaunchPlan struct {
+				Flow struct {
+					ID     string `json:"id"`
+					Phases []struct {
+						PhaseID        string  `json:"phaseId"`
+						StatusRaw      string  `json:"statusRaw"`
+						LatestLaunchID *string `json:"latestLaunchId"`
+						Outcome        string  `json:"outcome"`
+						Notes          string  `json:"notes"`
+					} `json:"phases"`
+				} `json:"flow"`
+				LaunchID    *string `json:"launchId"`
+				LaunchError string  `json:"launchError"`
+				Job         *struct {
+					ID string `json:"id"`
+				} `json:"job"`
+			} `json:"createFlowAndLaunchPlan"`
+		} `json:"data"`
+		Errors []any `json:"errors"`
+	}
+	postGraphQL(t, handler, `mutation($input: CreateFlowAndLaunchPlanInput!) {
+		createFlowAndLaunchPlan(input: $input) {
+			flow { id phases { phaseId statusRaw latestLaunchId outcome notes } }
+			launchId
+			launchError
+			job { id }
+		}
+	}`, map[string]any{"input": map[string]any{
+		"repoPath":     t.TempDir(),
+		"title":        "Start Error Flow",
+		"instructions": "start runtime",
+	}}, &out)
+	if len(out.Errors) != 0 {
+		t.Fatalf("GraphQL errors = %#v, want partial-success payload without top-level error", out.Errors)
+	}
+	payload := out.Data.CreateFlowAndLaunchPlan
+	if payload.Flow.ID == "" ||
+		payload.LaunchID == nil ||
+		payload.LaunchError != "runtime unavailable" ||
+		payload.Job != nil {
+		t.Fatalf("payload = %#v, want created flow with launch error and no job", payload)
+	}
+	records, err := store.List(flowstore.FlowFilter{})
+	if err != nil {
+		t.Fatalf("List flows: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("records = %#v, want one created flow", records)
+	}
+	phase := phaseByIDForTest(records[0], "plan")
+	if phase.Status != flowstore.PhaseNeedsAttention ||
+		phase.Outcome != "runtime_start_failed" ||
+		!strings.Contains(phase.Notes, "runtime unavailable") ||
+		len(phase.LaunchIDs) != 1 {
+		t.Fatalf("plan phase after start failure = %#v, want needs_attention with launch ID", phase)
+	}
+	var planPhase *struct {
+		PhaseID        string  `json:"phaseId"`
+		StatusRaw      string  `json:"statusRaw"`
+		LatestLaunchID *string `json:"latestLaunchId"`
+		Outcome        string  `json:"outcome"`
+		Notes          string  `json:"notes"`
+	}
+	for i := range payload.Flow.Phases {
+		if payload.Flow.Phases[i].PhaseID == "plan" {
+			planPhase = &payload.Flow.Phases[i]
+			break
+		}
+	}
+	if planPhase == nil ||
+		planPhase.StatusRaw != flowstore.PhaseNeedsAttention ||
+		planPhase.LatestLaunchID == nil ||
+		*planPhase.LatestLaunchID != *payload.LaunchID ||
+		planPhase.Outcome != "runtime_start_failed" ||
+		!strings.Contains(planPhase.Notes, "runtime unavailable") {
+		t.Fatalf("payload plan phase = %#v, want recoverable needs_attention phase", planPhase)
 	}
 }
 
@@ -1433,13 +1852,60 @@ type staticRuntimeJobLookup struct {
 	job *flowquery.RuntimeJob
 }
 
+type capturingRuntimeProvider struct {
+	now      time.Time
+	requests []runtimejobs.StartRequest
+	job      runtimejobs.Snapshot
+}
+
+func (p *capturingRuntimeProvider) RuntimeStateKnown() bool {
+	return true
+}
+
+func (p *capturingRuntimeProvider) ActiveRuntimeJob(_ flowstore.FlowRecord, phase flowstore.FlowPhase) (*flowquery.RuntimeJob, error) {
+	if p.job.ID == "" || flowstore.LatestPhaseLaunchID(phase) != p.job.LaunchID {
+		return nil, nil
+	}
+	return &flowquery.RuntimeJob{
+		ID:        p.job.ID,
+		LaunchID:  p.job.LaunchID,
+		FlowID:    p.job.FlowID,
+		PhaseID:   p.job.PhaseID,
+		Status:    string(p.job.Status),
+		CreatedAt: p.job.CreatedAt,
+	}, nil
+}
+
+func (p *capturingRuntimeProvider) Start(_ context.Context, req runtimejobs.StartRequest) (runtimejobs.Snapshot, error) {
+	p.requests = append(p.requests, req)
+	createdAt := p.now
+	if createdAt.IsZero() {
+		createdAt = time.Now()
+	}
+	p.job = runtimejobs.Snapshot{
+		ID:        "job-1",
+		LaunchID:  req.LaunchID,
+		FlowID:    req.FlowID,
+		PhaseID:   req.PhaseID,
+		Status:    runtimejobs.StatusQueued,
+		CreatedAt: createdAt,
+	}
+	return p.job, nil
+}
+
+func (p *capturingRuntimeProvider) Cancel(string) runtimejobs.CancelResult {
+	return runtimejobs.CancelResult{}
+}
+
 type staticFlowCreator struct {
 	input  graph.CreateFlowInput
 	record flowstore.FlowRecord
+	called bool
 }
 
 func (c *staticFlowCreator) CreateFlow(_ context.Context, input graph.CreateFlowInput) (flowstore.FlowRecord, error) {
 	c.input = input
+	c.called = true
 	return c.record, nil
 }
 

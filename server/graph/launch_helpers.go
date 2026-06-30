@@ -6,13 +6,12 @@ import (
 	"github.com/brian-bell/flowstate/agent"
 	"github.com/brian-bell/flowstate/flowstore"
 	"github.com/brian-bell/flowstate/internal/artifacts"
-	"github.com/brian-bell/flowstate/server/graph/model"
 )
 
-func (r *mutationResolver) launchAgentCommand(input model.LaunchFlowPhaseInput) (string, error) {
+func (r *mutationResolver) launchAgentCommand(agentCommand *string) (string, error) {
 	command := r.AgentCommand
-	if input.AgentCommand != nil {
-		command = *input.AgentCommand
+	if agentCommand != nil {
+		command = *agentCommand
 	}
 	command = agent.Normalize(command)
 	if command == "" {
@@ -27,10 +26,10 @@ func (r *mutationResolver) launchAgentCommand(input model.LaunchFlowPhaseInput) 
 	return command, nil
 }
 
-func (r *mutationResolver) launchReasoningEffort(command string, input model.LaunchFlowPhaseInput) (string, error) {
+func (r *mutationResolver) launchReasoningEffort(command string, reasoningEffort *string) (string, error) {
 	effort := ""
-	if input.ReasoningEffort != nil {
-		effort = *input.ReasoningEffort
+	if reasoningEffort != nil {
+		effort = *reasoningEffort
 	} else {
 		switch command {
 		case agent.CommandCodex:
