@@ -158,12 +158,19 @@ func (r *mutationResolver) StartFlow(ctx context.Context, input model.StartFlowI
 	}
 	var command string
 	var reasoningEffort string
+	headless := true
 	if input.LaunchPlan {
 		if r.FlowStore == nil {
 			return nil, fmt.Errorf("flow store is not configured")
 		}
 		if r.RuntimeStarter == nil {
 			return nil, fmt.Errorf("runtime job starter is not configured")
+		}
+		if input.Headless != nil {
+			headless = *input.Headless
+		}
+		if !headless {
+			return nil, fmt.Errorf("daemon runtime launches require headless mode")
 		}
 		var err error
 		command, err = r.launchAgentCommand(input.AgentCommand)
@@ -202,10 +209,6 @@ func (r *mutationResolver) StartFlow(ctx context.Context, input model.StartFlowI
 	}
 	if !flowlaunch.PhaseCanLaunch(record, phase) {
 		return nil, fmt.Errorf("phase %q is not launchable from status %q", phase.PhaseID, phase.Status)
-	}
-	headless := true
-	if input.Headless != nil {
-		headless = *input.Headless
 	}
 	launch, err := r.startFlowRuntimeJob(ctx, record, phase, command, reasoningEffort, headless, false)
 	if err != nil {

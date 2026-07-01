@@ -669,7 +669,11 @@ func TestRuntimeArtifactRootPrecedenceIncludesFlowRoot(t *testing.T) {
 	t.Setenv("FLOWSTATE_PLAN_STATE_ROOT", "/from/plan")
 	t.Setenv("FLOWSTATE_FLOW_STATE_ROOT", "/from/flow")
 
-	if got := runtimeArtifactRoot(cfg); got != "/from/flow" {
+	got, err := runtimeArtifactRoot(cfg)
+	if err != nil {
+		t.Fatalf("runtimeArtifactRoot returned error: %v", err)
+	}
+	if got != "/from/flow" {
 		t.Fatalf("artifact root = %q, want flow root", got)
 	}
 }
@@ -679,18 +683,47 @@ func TestRuntimeArtifactRootFallsBackThroughPlanSessionConfig(t *testing.T) {
 	t.Setenv("FLOWSTATE_FLOW_STATE_ROOT", "")
 	t.Setenv("FLOWSTATE_SESSION_STATE_ROOT", "/from/session")
 	t.Setenv("FLOWSTATE_PLAN_STATE_ROOT", "/from/plan")
-	if got := runtimeArtifactRoot(cfg); got != "/from/plan" {
+	got, err := runtimeArtifactRoot(cfg)
+	if err != nil {
+		t.Fatalf("runtimeArtifactRoot returned error: %v", err)
+	}
+	if got != "/from/plan" {
 		t.Fatalf("artifact root = %q, want plan root", got)
 	}
 
 	t.Setenv("FLOWSTATE_PLAN_STATE_ROOT", "")
-	if got := runtimeArtifactRoot(cfg); got != "/from/session" {
+	got, err = runtimeArtifactRoot(cfg)
+	if err != nil {
+		t.Fatalf("runtimeArtifactRoot returned error: %v", err)
+	}
+	if got != "/from/session" {
 		t.Fatalf("artifact root = %q, want session root", got)
 	}
 
 	t.Setenv("FLOWSTATE_SESSION_STATE_ROOT", "")
-	if got := runtimeArtifactRoot(cfg); got != "/from/config" {
+	got, err = runtimeArtifactRoot(cfg)
+	if err != nil {
+		t.Fatalf("runtimeArtifactRoot returned error: %v", err)
+	}
+	if got != "/from/config" {
 		t.Fatalf("artifact root = %q, want config root", got)
+	}
+}
+
+func TestRuntimeArtifactRootDefaultsWhenConfigRootEmpty(t *testing.T) {
+	stateHome := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", stateHome)
+	t.Setenv("FLOWSTATE_FLOW_STATE_ROOT", "")
+	t.Setenv("FLOWSTATE_PLAN_STATE_ROOT", "")
+	t.Setenv("FLOWSTATE_SESSION_STATE_ROOT", "")
+
+	got, err := runtimeArtifactRoot(config.Config{})
+	if err != nil {
+		t.Fatalf("runtimeArtifactRoot returned error: %v", err)
+	}
+	want := filepath.Join(stateHome, "flowstate", "sessions", "v1")
+	if got != want {
+		t.Fatalf("artifact root = %q, want default %q", got, want)
 	}
 }
 

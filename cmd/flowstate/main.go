@@ -300,11 +300,15 @@ func runServe(args []string, deps runDeps) error {
 	if err != nil {
 		return fmt.Errorf("error loading config: %w", err)
 	}
+	stateRoot, err := runtimeArtifactRootWithEnv(cfg, deps.getenv)
+	if err != nil {
+		return err
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if err := deps.serve(ctx, serveOptions{
 		Listen:                *listen,
-		StateRoot:             runtimeArtifactRootWithEnv(cfg, deps.getenv),
+		StateRoot:             stateRoot,
 		AgentCommand:          cfg.Agent.Command,
 		CodexReasoningEffort:  cfg.Agent.CodexReasoningEffort,
 		ClaudeReasoningEffort: cfg.Agent.ClaudeReasoningEffort,
@@ -386,7 +390,10 @@ func runSessionHook(args []string, deps runDeps) error {
 
 func startProgram(repos []scanner.Repo, opts startProgramOptions) error {
 	cfg := opts.Config
-	artifactRoot := runtimeArtifactRoot(cfg)
+	artifactRoot, err := runtimeArtifactRoot(cfg)
+	if err != nil {
+		return err
+	}
 	sessionStore, err := sessions.NewStore(sessions.StoreOptions{
 		Root:               artifactRoot,
 		CopyRawTranscripts: cfg.Sessions.CopyRawTranscripts,
@@ -652,21 +659,24 @@ func modelFlowRuntimeJobFromDaemon(job daemonclient.RuntimeJob) model.FlowRuntim
 	}
 }
 
-func runtimeArtifactRoot(cfg config.Config) string {
+func runtimeArtifactRoot(cfg config.Config) (string, error) {
 	return runtimeArtifactRootWithEnv(cfg, os.Getenv)
 }
 
-func runtimeArtifactRootWithEnv(cfg config.Config, getenv func(string) string) string {
+func runtimeArtifactRootWithEnv(cfg config.Config, getenv func(string) string) (string, error) {
 	if envRoot := getenv("FLOWSTATE_FLOW_STATE_ROOT"); envRoot != "" {
-		return envRoot
+		return envRoot, nil
 	}
 	if envRoot := getenv("FLOWSTATE_PLAN_STATE_ROOT"); envRoot != "" {
-		return envRoot
+		return envRoot, nil
 	}
 	if envRoot := getenv("FLOWSTATE_SESSION_STATE_ROOT"); envRoot != "" {
-		return envRoot
+		return envRoot, nil
 	}
-	return cfg.Sessions.Root
+	if cfg.Sessions.Root != "" {
+		return cfg.Sessions.Root, nil
+	}
+	return flowstore.DefaultRoot()
 }
 
 func bootstrapHookResolver(cfg config.Config) func(string) (actions.BootstrapHook, bool) {

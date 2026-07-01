@@ -1007,6 +1007,12 @@ func TestHandlerGraphQLStartFlowLaunchPlanValidatesBeforeCreate(t *testing.T) {
 			input:        map[string]any{"reasoningEffort": "turbo"},
 			wantError:    `unsupported reasoning effort "turbo" for codex`,
 		},
+		{
+			name:         "non-headless runtime",
+			defaultAgent: "codex",
+			input:        map[string]any{"headless": false},
+			wantError:    "daemon runtime launches require headless mode",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
