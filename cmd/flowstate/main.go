@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -470,10 +471,14 @@ func modelOptionsFromConfig(cfg config.Config, scanRepos func() ([]scanner.Repo,
 			if err != nil {
 				return model.FlowStartResult{}, err
 			}
+			if err := flowStartBlockedError(result.Flow); err != nil {
+				return model.FlowStartResult{Flow: result.Flow, DaemonLaunched: true}, err
+			}
 			return model.FlowStartResult{Flow: result.Flow}, nil
 		},
 		StartFlowPlan: func(req model.FlowStartRequest) (model.FlowStartResult, error) {
-			if agent.Normalize(req.AgentCommand) == agent.CommandCodexApp {
+			command := agent.Normalize(req.AgentCommand)
+			if command == agent.CommandCodexApp {
 				result, err := flowClient.StartFlow(context.Background(), daemonclient.StartFlowInput{
 					RepoPath:     req.RepoPath,
 					Title:        req.Title,
@@ -483,6 +488,9 @@ func modelOptionsFromConfig(cfg config.Config, scanRepos func() ([]scanner.Repo,
 				})
 				if err != nil {
 					return model.FlowStartResult{}, err
+				}
+				if err := flowStartBlockedError(result.Flow); err != nil {
+					return model.FlowStartResult{Flow: result.Flow, DaemonLaunched: true}, err
 				}
 				phaseID := req.PlanPhaseID
 				if phaseID == "" {
@@ -516,6 +524,9 @@ func modelOptionsFromConfig(cfg config.Config, scanRepos func() ([]scanner.Repo,
 					},
 				}, nil
 			}
+			if !req.Headless {
+				return model.FlowStartResult{}, fmt.Errorf("interactive daemon Flow launches are not supported; enable headless mode")
+			}
 			result, err := flowClient.StartFlow(context.Background(), daemonclient.StartFlowInput{
 				RepoPath:        req.RepoPath,
 				Title:           req.Title,
@@ -529,6 +540,9 @@ func modelOptionsFromConfig(cfg config.Config, scanRepos func() ([]scanner.Repo,
 			if err != nil {
 				return model.FlowStartResult{}, err
 			}
+			if err := flowStartBlockedError(result.Flow); err != nil {
+				return model.FlowStartResult{Flow: result.Flow, LaunchID: result.LaunchID, DaemonLaunched: true}, err
+			}
 			if result.LaunchError != "" {
 				return model.FlowStartResult{Flow: result.Flow, LaunchID: result.LaunchID, DaemonLaunched: true}, fmt.Errorf("daemon launch failed: %s", result.LaunchError)
 			}
@@ -539,6 +553,9 @@ func modelOptionsFromConfig(cfg config.Config, scanRepos func() ([]scanner.Repo,
 			}, nil
 		},
 		LaunchFlowPhase: func(req model.DaemonFlowPhaseLaunchRequest) (model.DaemonFlowPhaseLaunchResult, error) {
+			if !req.Headless {
+				return model.DaemonFlowPhaseLaunchResult{}, fmt.Errorf("interactive daemon Flow launches are not supported; enable headless mode")
+			}
 			result, err := flowClient.LaunchFlowPhase(context.Background(), daemonclient.LaunchFlowPhaseInput{
 				FlowID:          req.FlowID,
 				PhaseID:         req.PhaseID,
@@ -617,6 +634,24 @@ func modelOptionsFromConfig(cfg config.Config, scanRepos func() ([]scanner.Repo,
 			return config.ResetPromptTemplate(section, key)
 		},
 	}
+}
+
+func flowStartBlockedError(record flowstore.FlowRecord) error {
+	phase, ok := flowlaunch.PhaseByID(record, "plan")
+	if !ok || phase.Status != flowstore.PhaseBlocked {
+		return nil
+	}
+	detail := strings.TrimSpace(phase.Notes)
+	if detail == "" {
+		detail = strings.TrimSpace(phase.Summary)
+	}
+	if detail == "" {
+		detail = strings.TrimSpace(phase.Outcome)
+	}
+	if detail == "" {
+		return fmt.Errorf("flow plan phase blocked")
+	}
+	return fmt.Errorf("flow plan phase blocked: %s", detail)
 }
 
 func flowLaunchPromptTemplatesFromConfig(cfg config.Config) flowlaunch.PromptTemplates {

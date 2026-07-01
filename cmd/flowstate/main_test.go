@@ -1248,33 +1248,24 @@ func TestModelOptionsStartFlowPlanCreatesOnlyForCodexApp(t *testing.T) {
 	}
 }
 
-func TestModelOptionsStartFlowPlanForcesHeadlessDaemonRuntime(t *testing.T) {
+func TestModelOptionsStartFlowPlanRejectsInteractiveDaemonRuntime(t *testing.T) {
 	sessionStore, planStore, _ := testArtifactStores(t)
-	client := &capturingStartFlowClient{
-		result: daemonclient.StartFlowResult{Flow: flowstore.FlowRecord{
-			FlowID:   "flow-1",
-			RepoPath: "/dev/alpha",
-			Phases:   []flowstore.FlowPhase{{PhaseID: "plan", Status: flowstore.PhaseBlocked}},
-		}},
-	}
+	client := &capturingStartFlowClient{}
 	opts := modelOptionsFromConfig(config.Config{Agent: config.AgentConfig{Command: "codex"}}, nil, sessionStore, planStore, client)
 
-	result, err := opts.StartFlowPlan(model.FlowStartRequest{
+	_, err := opts.StartFlowPlan(model.FlowStartRequest{
 		RepoPath:     "/dev/alpha",
-		Title:        "Headless Flow",
+		Title:        "Interactive Flow",
 		Instructions: "Write the plan",
 		AgentCommand: "codex",
 		Headless:     false,
 		PlanPhaseID:  "plan",
 	})
-	if err != nil {
-		t.Fatalf("StartFlowPlan: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "interactive daemon Flow launches are not supported") {
+		t.Fatalf("StartFlowPlan error = %v, want interactive unsupported error", err)
 	}
-	if !client.input.Headless {
-		t.Fatalf("StartFlow input = %#v, want headless daemon runtime", client.input)
-	}
-	if !result.DaemonLaunched || result.LaunchContext != (actions.AgentLaunchContext{}) {
-		t.Fatalf("result = %#v, want daemon-handled no-launch response", result)
+	if client.called {
+		t.Fatalf("StartFlow should not be called for interactive daemon runtime: %#v", client.input)
 	}
 }
 
@@ -1305,7 +1296,66 @@ func TestModelOptionsStartFlowPlanReturnsDaemonLaunchError(t *testing.T) {
 	}
 }
 
-func TestModelOptionsLaunchFlowPhaseForcesHeadlessDaemonRuntime(t *testing.T) {
+func TestModelOptionsStartFlowPlanReturnsBlockedPlanError(t *testing.T) {
+	sessionStore, planStore, _ := testArtifactStores(t)
+	client := &capturingStartFlowClient{
+		result: daemonclient.StartFlowResult{Flow: flowstore.FlowRecord{
+			FlowID:   "flow-1",
+			RepoPath: "/dev/alpha",
+			Phases: []flowstore.FlowPhase{{
+				PhaseID: "plan",
+				Status:  flowstore.PhaseBlocked,
+				Notes:   "Bootstrap hook failed: missing env file",
+			}},
+		}},
+	}
+	opts := modelOptionsFromConfig(config.Config{Agent: config.AgentConfig{Command: "codex"}}, nil, sessionStore, planStore, client)
+
+	result, err := opts.StartFlowPlan(model.FlowStartRequest{
+		RepoPath:     "/dev/alpha",
+		Title:        "Blocked Flow",
+		Instructions: "Write the plan",
+		AgentCommand: "codex",
+		Headless:     true,
+		PlanPhaseID:  "plan",
+	})
+	if err == nil || !strings.Contains(err.Error(), "Bootstrap hook failed") {
+		t.Fatalf("StartFlowPlan error = %v, want blocked plan detail", err)
+	}
+	if result.Flow.FlowID != "flow-1" || !result.DaemonLaunched {
+		t.Fatalf("result = %#v, want recoverable blocked flow metadata", result)
+	}
+}
+
+func TestModelOptionsCreateFlowReturnsBlockedPlanError(t *testing.T) {
+	sessionStore, planStore, _ := testArtifactStores(t)
+	client := &capturingStartFlowClient{
+		result: daemonclient.StartFlowResult{Flow: flowstore.FlowRecord{
+			FlowID:   "flow-1",
+			RepoPath: "/dev/alpha",
+			Phases: []flowstore.FlowPhase{{
+				PhaseID: "plan",
+				Status:  flowstore.PhaseBlocked,
+				Summary: "Worktree creation failed.",
+			}},
+		}},
+	}
+	opts := modelOptionsFromConfig(config.Config{Agent: config.AgentConfig{Command: "codex"}}, nil, sessionStore, planStore, client)
+
+	result, err := opts.CreateFlow(model.FlowStartRequest{
+		RepoPath:     "/dev/alpha",
+		Title:        "Blocked Flow",
+		Instructions: "Park it",
+	})
+	if err == nil || !strings.Contains(err.Error(), "Worktree creation failed") {
+		t.Fatalf("CreateFlow error = %v, want blocked plan detail", err)
+	}
+	if result.Flow.FlowID != "flow-1" || !result.DaemonLaunched {
+		t.Fatalf("result = %#v, want recoverable blocked flow metadata", result)
+	}
+}
+
+func TestModelOptionsLaunchFlowPhaseRejectsInteractiveDaemonRuntime(t *testing.T) {
 	sessionStore, planStore, _ := testArtifactStores(t)
 	client := &capturingStartFlowClient{
 		launchResult: daemonclient.LaunchFlowPhaseResult{
@@ -1316,20 +1366,17 @@ func TestModelOptionsLaunchFlowPhaseForcesHeadlessDaemonRuntime(t *testing.T) {
 	}
 	opts := modelOptionsFromConfig(config.Config{Agent: config.AgentConfig{Command: "codex"}}, nil, sessionStore, planStore, client)
 
-	result, err := opts.LaunchFlowPhase(model.DaemonFlowPhaseLaunchRequest{
+	_, err := opts.LaunchFlowPhase(model.DaemonFlowPhaseLaunchRequest{
 		FlowID:     "flow-1",
 		PhaseID:    "implementation",
 		Headless:   false,
 		AutoLaunch: true,
 	})
-	if err != nil {
-		t.Fatalf("LaunchFlowPhase: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "interactive daemon Flow launches are not supported") {
+		t.Fatalf("LaunchFlowPhase error = %v, want interactive unsupported error", err)
 	}
-	if !client.launchInput.Headless || !client.launchInput.AutoLaunch {
-		t.Fatalf("launch input = %#v, want forced headless preserving auto-launch", client.launchInput)
-	}
-	if result.LaunchID != "launch-1" {
-		t.Fatalf("result = %#v", result)
+	if client.launchInput.FlowID != "" {
+		t.Fatalf("LaunchFlowPhase should not be called for interactive daemon runtime: %#v", client.launchInput)
 	}
 }
 
