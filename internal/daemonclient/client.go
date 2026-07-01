@@ -68,7 +68,7 @@ type FlowClient interface {
 	SetFlowAutoMode(context.Context, flowstore.AutoModeUpdate) (flowstore.FlowRecord, error)
 	DeleteFlow(context.Context, string) (string, error)
 	StartFlow(context.Context, StartFlowInput) (StartFlowResult, error)
-	LaunchFlowPhase(context.Context, string, string, string, string) (LaunchFlowPhaseResult, error)
+	LaunchFlowPhase(context.Context, LaunchFlowPhaseInput) (LaunchFlowPhaseResult, error)
 	CancelRuntimeJob(context.Context, string) (RuntimeJob, error)
 }
 
@@ -80,6 +80,7 @@ type StartFlowInput struct {
 	Instructions    string
 	BaseRef         string
 	LaunchPlan      bool
+	Headless        bool
 	AgentCommand    string
 	ReasoningEffort string
 }
@@ -101,6 +102,15 @@ type LaunchFlowPhaseResult struct {
 	PhaseID  string
 	LaunchID string
 	Job      RuntimeJob
+}
+
+type LaunchFlowPhaseInput struct {
+	FlowID          string
+	PhaseID         string
+	AgentCommand    string
+	ReasoningEffort string
+	Headless        bool
+	AutoLaunch      bool
 }
 
 type RuntimeJob struct {
@@ -153,7 +163,7 @@ func New(opts Options) (*Client, error) {
 	}
 	httpClient := opts.HTTPClient
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: 15 * time.Second}
+		httpClient = &http.Client{}
 	}
 	maxAttempts := opts.MaxAttempts
 	if maxAttempts <= 0 {
@@ -445,6 +455,7 @@ func (c *Client) StartFlow(ctx context.Context, input StartFlowInput) (StartFlow
 		"title":        input.Title,
 		"instructions": input.Instructions,
 		"launchPlan":   input.LaunchPlan,
+		"headless":     input.Headless,
 	}
 	if input.BaseRef != "" {
 		graphInput["baseRef"] = input.BaseRef
@@ -477,13 +488,18 @@ func (c *Client) StartFlow(ctx context.Context, input StartFlowInput) (StartFlow
 	return result, nil
 }
 
-func (c *Client) LaunchFlowPhase(ctx context.Context, flowID, phaseID, agentCommand, reasoningEffort string) (LaunchFlowPhaseResult, error) {
-	input := map[string]any{"flowId": flowID, "phaseId": phaseID}
-	if strings.TrimSpace(agentCommand) != "" {
-		input["agentCommand"] = agentCommand
+func (c *Client) LaunchFlowPhase(ctx context.Context, req LaunchFlowPhaseInput) (LaunchFlowPhaseResult, error) {
+	input := map[string]any{
+		"flowId":     req.FlowID,
+		"phaseId":    req.PhaseID,
+		"headless":   req.Headless,
+		"autoLaunch": req.AutoLaunch,
 	}
-	if strings.TrimSpace(reasoningEffort) != "" {
-		input["reasoningEffort"] = reasoningEffort
+	if strings.TrimSpace(req.AgentCommand) != "" {
+		input["agentCommand"] = req.AgentCommand
+	}
+	if strings.TrimSpace(req.ReasoningEffort) != "" {
+		input["reasoningEffort"] = req.ReasoningEffort
 	}
 	var data struct {
 		LaunchFlowPhase struct {

@@ -81,6 +81,16 @@ func TestClientListFlowsMapsPersistedRecordsAndRepoFilter(t *testing.T) {
 	}
 }
 
+func TestNewDefaultHTTPClientDoesNotSetRequestTimeout(t *testing.T) {
+	client, err := New(Options{EndpointURL: "http://127.0.0.1:1", Token: "test-token"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if client.httpClient.Timeout != 0 {
+		t.Fatalf("default HTTP timeout = %s, want no blanket request timeout", client.httpClient.Timeout)
+	}
+}
+
 func TestClientReadFlowAndNotFound(t *testing.T) {
 	store, url := newClientGraphQLServer(t, "test-token")
 	created := createClientFlow(t, store, flowstore.FlowRecord{

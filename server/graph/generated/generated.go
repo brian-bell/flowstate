@@ -1204,6 +1204,7 @@ input StartFlowInput {
   instructions: String!
   baseRef: String
   launchPlan: Boolean!
+  headless: Boolean
   agentCommand: String
   reasoningEffort: String
 }
@@ -1220,6 +1221,8 @@ input LaunchFlowPhaseInput {
   phaseId: ID!
   agentCommand: String
   reasoningEffort: String
+  headless: Boolean
+  autoLaunch: Boolean
 }
 
 type LaunchFlowPhasePayload {
@@ -6700,7 +6703,7 @@ func (ec *executionContext) unmarshalInputLaunchFlowPhaseInput(ctx context.Conte
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"flowId", "phaseId", "agentCommand", "reasoningEffort"}
+	fieldsInOrder := [...]string{"flowId", "phaseId", "agentCommand", "reasoningEffort", "headless", "autoLaunch"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -6735,6 +6738,20 @@ func (ec *executionContext) unmarshalInputLaunchFlowPhaseInput(ctx context.Conte
 				return it, err
 			}
 			it.ReasoningEffort = data
+		case "headless":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("headless"))
+			data, err := ec.unmarshalOBoolean2ᚖbool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Headless = data
+		case "autoLaunch":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("autoLaunch"))
+			data, err := ec.unmarshalOBoolean2ᚖbool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.AutoLaunch = data
 		}
 	}
 	return it, nil
@@ -7173,7 +7190,7 @@ func (ec *executionContext) unmarshalInputStartFlowInput(ctx context.Context, ob
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"repoPath", "title", "instructions", "baseRef", "launchPlan", "agentCommand", "reasoningEffort"}
+	fieldsInOrder := [...]string{"repoPath", "title", "instructions", "baseRef", "launchPlan", "headless", "agentCommand", "reasoningEffort"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -7215,6 +7232,13 @@ func (ec *executionContext) unmarshalInputStartFlowInput(ctx context.Context, ob
 				return it, err
 			}
 			it.LaunchPlan = data
+		case "headless":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("headless"))
+			data, err := ec.unmarshalOBoolean2ᚖbool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Headless = data
 		case "agentCommand":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("agentCommand"))
 			data, err := ec.unmarshalOString2ᚖstring(ctx, v)

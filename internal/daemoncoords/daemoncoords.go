@@ -61,6 +61,16 @@ func Path() (string, error) {
 	return filepath.Join(home, ".local", "state", coordsDir, coordsFile), nil
 }
 
+// PathForStateRoot returns the coords file colocated with a specific artifact
+// state root. It is used by CLI commands that accept --state-root while still
+// talking only to the daemon.
+func PathForStateRoot(root string) (string, error) {
+	if !filepath.IsAbs(root) {
+		return "", fmt.Errorf("state root must be an absolute path: %q", root)
+	}
+	return filepath.Join(root, coordsFile), nil
+}
+
 // Write replaces the coords file with c using a 0700 parent directory and a
 // 0600 atomic write. It intentionally overwrites any existing coords, including
 // stale coords left by a crashed daemon.
@@ -72,6 +82,23 @@ func Write(c Coords) error {
 	if err != nil {
 		return err
 	}
+	return writeTo(path, c)
+}
+
+// WriteForStateRoot writes discovery coords under a specific artifact state
+// root, alongside the default global discovery file.
+func WriteForStateRoot(root string, c Coords) error {
+	if err := c.validate(); err != nil {
+		return err
+	}
+	path, err := PathForStateRoot(root)
+	if err != nil {
+		return err
+	}
+	return writeTo(path, c)
+}
+
+func writeTo(path string, c Coords) error {
 	dir := filepath.Dir(path)
 	// Secure only directories we create. Tightening permissions on a
 	// pre-existing parent we do not own (for example /tmp or XDG_RUNTIME_DIR)
@@ -98,6 +125,15 @@ func Write(c Coords) error {
 // platform-specific process probing are out of scope here.
 func Read() (Coords, error) {
 	path, err := Path()
+	if err != nil {
+		return Coords{}, err
+	}
+	return readFrom(path)
+}
+
+// ReadForStateRoot reads discovery coords from a specific artifact state root.
+func ReadForStateRoot(root string) (Coords, error) {
+	path, err := PathForStateRoot(root)
 	if err != nil {
 		return Coords{}, err
 	}
@@ -132,6 +168,20 @@ func RemoveIfMatches(c Coords) error {
 	if err != nil {
 		return err
 	}
+	return removeIfMatches(path, c)
+}
+
+// RemoveIfMatchesForStateRoot deletes root-specific coords only when they still
+// match c exactly.
+func RemoveIfMatchesForStateRoot(root string, c Coords) error {
+	path, err := PathForStateRoot(root)
+	if err != nil {
+		return err
+	}
+	return removeIfMatches(path, c)
+}
+
+func removeIfMatches(path string, c Coords) error {
 	current, err := readFrom(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {

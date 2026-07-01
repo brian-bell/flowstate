@@ -73,6 +73,7 @@ input StartFlowInput {
   instructions: String!
   baseRef: String
   launchPlan: Boolean!
+  headless: Boolean
   agentCommand: String
   reasoningEffort: String
 }
@@ -89,6 +90,8 @@ input LaunchFlowPhaseInput {
   phaseId: ID!
   agentCommand: String
   reasoningEffort: String
+  headless: Boolean
+  autoLaunch: Boolean
 }
 
 type LaunchFlowPhasePayload {

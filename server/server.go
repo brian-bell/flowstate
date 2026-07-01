@@ -265,8 +265,17 @@ func Run(ctx context.Context, opts Options) error {
 		if err := daemoncoords.Write(publishedCoords); err != nil {
 			return fmt.Errorf("publish daemon coords: %w", err)
 		}
+		if opts.StateRoot != "" {
+			if err := daemoncoords.WriteForStateRoot(opts.StateRoot, publishedCoords); err != nil {
+				_ = daemoncoords.RemoveIfMatches(publishedCoords)
+				return fmt.Errorf("publish daemon coords for state root: %w", err)
+			}
+		}
 		defer func() {
 			_ = daemoncoords.RemoveIfMatches(publishedCoords)
+			if opts.StateRoot != "" {
+				_ = daemoncoords.RemoveIfMatchesForStateRoot(opts.StateRoot, publishedCoords)
+			}
 		}()
 	}
 

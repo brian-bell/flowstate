@@ -14,6 +14,7 @@ import (
 	"github.com/brian-bell/flowstate/actions"
 	"github.com/brian-bell/flowstate/config"
 	"github.com/brian-bell/flowstate/flowstore"
+	"github.com/brian-bell/flowstate/internal/daemonclient"
 	"github.com/brian-bell/flowstate/internal/version"
 	"github.com/brian-bell/flowstate/model"
 	"github.com/brian-bell/flowstate/planstore"
@@ -1151,6 +1152,80 @@ func TestRunSessionHookEnvStateRootOverridesConfig(t *testing.T) {
 	if matches, err := filepath.Glob(filepath.Join(configRoot, "sessions", "codex", "*", "meta.json")); err != nil || len(matches) != 0 {
 		t.Fatalf("expected no metadata under config root, matches=%#v err=%v", matches, err)
 	}
+}
+
+func TestModelOptionsStartFlowPlanCreatesOnlyForCodexApp(t *testing.T) {
+	root := t.TempDir()
+	sessionStore, err := sessions.NewStore(sessions.StoreOptions{Root: root})
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	planStore, err := planstore.NewStore(planstore.StoreOptions{Root: root})
+	if err != nil {
+		t.Fatalf("NewPlanStore: %v", err)
+	}
+	client := &capturingStartFlowClient{
+		result: daemonclient.StartFlowResult{Flow: flowstore.FlowRecord{
+			FlowID:       "flow-1",
+			Title:        "Codex App Flow",
+			Instructions: "Write the plan",
+			RepoPath:     "/dev/alpha",
+			WorktreePath: "/dev/alpha-worktrees/flow-codex-app",
+			Branch:       "flow/codex-app",
+			Commit:       "abc123",
+			Status:       flowstore.StatusInProgress,
+			Phases: []flowstore.FlowPhase{
+				{PhaseID: "plan", Title: "Plan", Status: flowstore.PhaseReady, Order: 1},
+			},
+		}},
+	}
+	opts := modelOptionsFromConfig(config.Config{Agent: config.AgentConfig{Command: "codex-app"}}, nil, sessionStore, planStore, client)
+
+	result, err := opts.StartFlowPlan(model.FlowStartRequest{
+		RepoPath:         "/dev/alpha",
+		Title:            "Codex App Flow",
+		Instructions:     "Write the plan",
+		BaseRef:          "main",
+		AgentCommand:     "codex-app",
+		SessionStateRoot: root,
+		PlanPhaseID:      "plan",
+		PlanPhaseTitle:   "Plan",
+		PlanPhaseStatus:  flowstore.PhaseRunning,
+	})
+	if err != nil {
+		t.Fatalf("StartFlowPlan: %v", err)
+	}
+	if !client.called || client.input.LaunchPlan {
+		t.Fatalf("StartFlow input = %#v, want create-only daemon call for codex-app", client.input)
+	}
+	if result.DaemonLaunched {
+		t.Fatal("codex-app result should launch externally, not report daemon runtime launch")
+	}
+	ctx := result.LaunchContext
+	if ctx.Command != "codex-app" ||
+		ctx.FlowID != "flow-1" ||
+		ctx.FlowPhaseID != "plan" ||
+		ctx.WorktreePath != "/dev/alpha-worktrees/flow-codex-app" ||
+		ctx.LaunchID == "" ||
+		ctx.FlowLaunchTracked {
+		t.Fatalf("launch context = %#v, want external codex-app flow plan launch", ctx)
+	}
+	if !strings.Contains(ctx.InitialPrompt, "Write the plan") {
+		t.Fatalf("initial prompt = %q, want flow instructions", ctx.InitialPrompt)
+	}
+}
+
+type capturingStartFlowClient struct {
+	daemonclient.FlowClient
+	called bool
+	input  daemonclient.StartFlowInput
+	result daemonclient.StartFlowResult
+}
+
+func (c *capturingStartFlowClient) StartFlow(_ context.Context, input daemonclient.StartFlowInput) (daemonclient.StartFlowResult, error) {
+	c.called = true
+	c.input = input
+	return c.result, nil
 }
 
 func singleSessionFile(t *testing.T, root, provider, name string) string {

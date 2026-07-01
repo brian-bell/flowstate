@@ -2039,6 +2039,7 @@ func TestHandlerGraphQLLaunchFlowPhaseStartsRuntimeJobAndMarksPhaseRunning(t *te
 		WorktreePath: t.TempDir(),
 		Branch:       "flow/launch",
 		Commit:       "abc123",
+		AutoMode:     true,
 	})
 	record = completeGraphQLPhase(t, store, record.FlowID, "plan", flowstore.PhaseUpdate{Status: flowstore.PhaseCompleted})
 	record = completeGraphQLPhase(t, store, record.FlowID, "plan-review", flowstore.PhaseUpdate{Status: flowstore.PhaseCompleted, Outcome: flowstore.OutcomeApproved})
@@ -2087,7 +2088,12 @@ func TestHandlerGraphQLLaunchFlowPhaseStartsRuntimeJobAndMarksPhaseRunning(t *te
 			launchId
 			job { id launchId flowId phaseId status createdAt }
 		}
-	}`, map[string]any{"input": map[string]any{"flowId": record.FlowID, "phaseId": "implementation"}}, &out)
+		}`, map[string]any{"input": map[string]any{
+		"flowId":     record.FlowID,
+		"phaseId":    "implementation",
+		"headless":   false,
+		"autoLaunch": true,
+	}}, &out)
 	if len(out.Errors) != 0 {
 		t.Fatalf("GraphQL errors: %#v", out.Errors)
 	}
@@ -2130,10 +2136,10 @@ func TestHandlerGraphQLLaunchFlowPhaseStartsRuntimeJobAndMarksPhaseRunning(t *te
 	if len(launched) != 1 ||
 		launched[0].Command != "codex" ||
 		launched[0].ReasoningEffort != "high" ||
-		!launched[0].Headless ||
+		launched[0].Headless ||
 		launched[0].Embedded ||
 		!strings.Contains(launched[0].InitialPrompt, "Use the commit skill before completing this phase.") {
-		t.Fatalf("launch context = %#v, want headless codex implementation launch", launched)
+		t.Fatalf("launch context = %#v, want interactive codex implementation launch", launched)
 	}
 
 	var query struct {

@@ -19,6 +19,7 @@ type FlowStartRequest struct {
 	BaseRef             string
 	AgentCommand        string
 	ReasoningEffort     string
+	Headless            bool
 	SessionStateRoot    string
 	FlowPromptTemplates FlowPromptTemplates
 	// FlowPromptTemplatesProvided forces StartPlan to use FlowPromptTemplates

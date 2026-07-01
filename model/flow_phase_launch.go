@@ -32,6 +32,8 @@ type DaemonFlowPhaseLaunchRequest struct {
 	PhaseID         string
 	AgentCommand    string
 	ReasoningEffort string
+	Headless        bool
+	AutoLaunch      bool
 }
 
 type DaemonFlowPhaseLaunchResult struct {
@@ -181,6 +183,8 @@ func (m Model) prepareFlowPhaseLaunch(target flowPhaseLaunchTarget) tea.Cmd {
 				PhaseID:         target.Phase.PhaseID,
 				AgentCommand:    command,
 				ReasoningEffort: reasoningEffort,
+				Headless:        target.Headless,
+				AutoLaunch:      target.AutoLaunch,
 			})
 			if err != nil {
 				return ActionFailedMsg{RepoPath: target.RepoPath, Err: err.Error()}

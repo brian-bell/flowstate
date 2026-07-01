@@ -185,7 +185,7 @@ func (c testFlowClient) StartFlow(ctx context.Context, input daemonclient.StartF
 	return daemonclient.StartFlowResult{Flow: record}, nil
 }
 
-func (c testFlowClient) LaunchFlowPhase(context.Context, string, string, string, string) (daemonclient.LaunchFlowPhaseResult, error) {
+func (c testFlowClient) LaunchFlowPhase(context.Context, daemonclient.LaunchFlowPhaseInput) (daemonclient.LaunchFlowPhaseResult, error) {
 	return daemonclient.LaunchFlowPhaseResult{}, fmt.Errorf("test flow client does not launch runtime jobs")
 }
 

@@ -8570,7 +8570,8 @@ func TestModel_GLaunchesFlowPhaseThroughDaemonAdapterWhenConfigured(t *testing.T
 		t.Fatalf("launched message = %#v", launched)
 	}
 	if launchReq.FlowID != "flow-1" || launchReq.PhaseID != "implementation" ||
-		launchReq.AgentCommand != "codex" || launchReq.ReasoningEffort != "high" {
+		launchReq.AgentCommand != "codex" || launchReq.ReasoningEffort != "high" ||
+		!launchReq.Headless || launchReq.AutoLaunch {
 		t.Fatalf("daemon launch request = %#v", launchReq)
 	}
 	m, cmd = update(m, launched)
@@ -8586,6 +8587,62 @@ func TestModel_GLaunchesFlowPhaseThroughDaemonAdapterWhenConfigured(t *testing.T
 	}
 	if refreshes != 1 {
 		t.Fatalf("ListFlows refreshes = %d, want 1", refreshes)
+	}
+}
+
+func TestModel_AutoFlowLaunchPreservesDaemonLaunchFlags(t *testing.T) {
+	previous := autoFlowWithPhaseStatuses(map[string]string{
+		"plan":           flowstore.PhaseCompleted,
+		"plan-review":    flowstore.PhaseRunning,
+		"implementation": flowstore.PhasePending,
+	})
+	current := autoFlowWithPhaseStatuses(map[string]string{
+		"plan":           flowstore.PhaseCompleted,
+		"plan-review":    flowstore.PhaseCompleted,
+		"implementation": flowstore.PhaseReady,
+	})
+	var launchReq model.DaemonFlowPhaseLaunchRequest
+	m := model.NewWithOptions(testRepos(), model.Options{
+		AgentCommand: "codex",
+		LaunchFlowPhase: func(req model.DaemonFlowPhaseLaunchRequest) (model.DaemonFlowPhaseLaunchResult, error) {
+			launchReq = req
+			return model.DaemonFlowPhaseLaunchResult{
+				FlowID:   req.FlowID,
+				PhaseID:  req.PhaseID,
+				LaunchID: "daemon-auto-launch",
+			}, nil
+		},
+		ListFlows: func(filter flowstore.FlowFilter) ([]flowstore.FlowRecord, error) {
+			running := current
+			running.RepoPath = filter.RepoPath
+			for i := range running.Phases {
+				if running.Phases[i].PhaseID == "implementation" {
+					running.Phases[i].Status = flowstore.PhaseRunning
+					running.Phases[i].LaunchIDs = []string{"daemon-auto-launch"}
+				}
+			}
+			return []flowstore.FlowRecord{running}, nil
+		},
+	})
+	m = flowsInRightPane(t, m, []flowstore.FlowRecord{previous})
+
+	_, cmd := update(m, model.FlowResultMsg{
+		RepoPath:    "/dev/alpha",
+		Flows:       []flowstore.FlowRecord{current},
+		ListRequest: m.ListRequest(ui.ModeFlows),
+	})
+	if cmd == nil {
+		t.Fatal("Flow refresh should return daemon auto-launch command")
+	}
+	msg := cmd()
+	if _, ok := msg.(model.FlowPhaseLaunchedMsg); !ok {
+		t.Fatalf("auto-launch command returned %T, want FlowPhaseLaunchedMsg", msg)
+	}
+	if launchReq.FlowID != "flow-1" ||
+		launchReq.PhaseID != "implementation" ||
+		!launchReq.Headless ||
+		!launchReq.AutoLaunch {
+		t.Fatalf("daemon auto-launch request = %#v", launchReq)
 	}
 }
 

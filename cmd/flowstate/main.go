@@ -13,12 +13,15 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/google/uuid"
 
 	"github.com/brian-bell/flowstate/actions"
+	"github.com/brian-bell/flowstate/agent"
 	"github.com/brian-bell/flowstate/config"
 	"github.com/brian-bell/flowstate/flowlaunch"
 	"github.com/brian-bell/flowstate/flowstore"
 	"github.com/brian-bell/flowstate/internal/daemonclient"
+	"github.com/brian-bell/flowstate/internal/daemoncoords"
 	"github.com/brian-bell/flowstate/internal/version"
 	"github.com/brian-bell/flowstate/model"
 	"github.com/brian-bell/flowstate/planstore"
@@ -256,8 +259,14 @@ func fillRunDeps(deps runDeps) runDeps {
 		deps.serve = server.Run
 	}
 	if deps.newFlowClient == nil {
-		deps.newFlowClient = func(string) (daemonclient.FlowClient, error) {
-			return daemonclient.New(daemonclient.Options{})
+		deps.newFlowClient = func(stateRoot string) (daemonclient.FlowClient, error) {
+			opts := daemonclient.Options{}
+			if stateRoot != "" {
+				opts.Coords = func() (daemoncoords.Coords, error) {
+					return daemoncoords.ReadForStateRoot(stateRoot)
+				}
+			}
+			return daemonclient.New(opts)
 		}
 	}
 	if deps.stdin == nil {
@@ -453,12 +462,56 @@ func modelOptionsFromConfig(cfg config.Config, scanRepos func() ([]scanner.Repo,
 			return model.FlowStartResult{Flow: result.Flow}, nil
 		},
 		StartFlowPlan: func(req model.FlowStartRequest) (model.FlowStartResult, error) {
+			if agent.Normalize(req.AgentCommand) == agent.CommandCodexApp {
+				result, err := flowClient.StartFlow(context.Background(), daemonclient.StartFlowInput{
+					RepoPath:     req.RepoPath,
+					Title:        req.Title,
+					Instructions: req.Instructions,
+					BaseRef:      req.BaseRef,
+					LaunchPlan:   false,
+				})
+				if err != nil {
+					return model.FlowStartResult{}, err
+				}
+				phaseID := req.PlanPhaseID
+				if phaseID == "" {
+					phaseID = "plan"
+				}
+				phase, ok := flowlaunch.PhaseByID(result.Flow, phaseID)
+				if !ok {
+					return model.FlowStartResult{}, fmt.Errorf("phase %q not found in flow %q", phaseID, result.Flow.FlowID)
+				}
+				if !flowlaunch.PhaseCanLaunch(result.Flow, phase) {
+					return model.FlowStartResult{Flow: result.Flow, DaemonLaunched: true}, nil
+				}
+				launchID := uuid.NewString()
+				return model.FlowStartResult{
+					Flow:     result.Flow,
+					LaunchID: launchID,
+					LaunchContext: actions.AgentLaunchContext{
+						Command:          agent.CommandCodexApp,
+						LaunchID:         launchID,
+						RepoPath:         result.Flow.RepoPath,
+						WorktreePath:     result.Flow.WorktreePath,
+						Branch:           result.Flow.Branch,
+						Commit:           result.Flow.Commit,
+						SessionStateRoot: sessionStore.Root(),
+						PlanPhaseID:      phaseID,
+						PlanPhaseTitle:   req.PlanPhaseTitle,
+						PlanPhaseStatus:  req.PlanPhaseStatus,
+						FlowID:           result.Flow.FlowID,
+						FlowPhaseID:      phase.PhaseID,
+						InitialPrompt:    flowlaunch.PhasePrompt(result.Flow, phase, result.Flow.PlanPath, "", flowLaunchPromptTemplatesFromConfig(cfg)),
+					},
+				}, nil
+			}
 			result, err := flowClient.StartFlow(context.Background(), daemonclient.StartFlowInput{
 				RepoPath:        req.RepoPath,
 				Title:           req.Title,
 				Instructions:    req.Instructions,
 				BaseRef:         req.BaseRef,
 				LaunchPlan:      true,
+				Headless:        req.Headless,
 				AgentCommand:    req.AgentCommand,
 				ReasoningEffort: req.ReasoningEffort,
 			})
@@ -472,7 +525,14 @@ func modelOptionsFromConfig(cfg config.Config, scanRepos func() ([]scanner.Repo,
 			}, nil
 		},
 		LaunchFlowPhase: func(req model.DaemonFlowPhaseLaunchRequest) (model.DaemonFlowPhaseLaunchResult, error) {
-			result, err := flowClient.LaunchFlowPhase(context.Background(), req.FlowID, req.PhaseID, req.AgentCommand, req.ReasoningEffort)
+			result, err := flowClient.LaunchFlowPhase(context.Background(), daemonclient.LaunchFlowPhaseInput{
+				FlowID:          req.FlowID,
+				PhaseID:         req.PhaseID,
+				AgentCommand:    req.AgentCommand,
+				ReasoningEffort: req.ReasoningEffort,
+				Headless:        req.Headless,
+				AutoLaunch:      req.AutoLaunch,
+			})
 			if err != nil {
 				return model.DaemonFlowPhaseLaunchResult{}, err
 			}
@@ -541,6 +601,19 @@ func modelOptionsFromConfig(cfg config.Config, scanRepos func() ([]scanner.Repo,
 		ResetPromptTemplate: func(section, key string) error {
 			return config.ResetPromptTemplate(section, key)
 		},
+	}
+}
+
+func flowLaunchPromptTemplatesFromConfig(cfg config.Config) flowlaunch.PromptTemplates {
+	return flowlaunch.PromptTemplates{
+		Plan:           cfg.FlowPrompts.Plan,
+		PlanReview:     cfg.FlowPrompts.PlanReview,
+		Implementation: cfg.FlowPrompts.Implementation,
+		ReviewLoop:     cfg.FlowPrompts.ReviewLoop,
+		PRCreation:     cfg.FlowPrompts.PRCreation,
+		Autoreview:     cfg.FlowPrompts.Autoreview,
+		Merge:          cfg.FlowPrompts.Merge,
+		Generic:        cfg.FlowPrompts.Generic,
 	}
 }
 

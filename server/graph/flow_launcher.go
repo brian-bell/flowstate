@@ -58,12 +58,13 @@ func (r *mutationResolver) newFlowLauncher(record flowstore.FlowRecord, command,
 	}
 }
 
-func (r *mutationResolver) startFlowRuntimeJob(ctx context.Context, record flowstore.FlowRecord, phase flowstore.FlowPhase, command, reasoningEffort string) (flowRuntimeLaunch, error) {
+func (r *mutationResolver) startFlowRuntimeJob(ctx context.Context, record flowstore.FlowRecord, phase flowstore.FlowPhase, command, reasoningEffort string, headless, autoLaunch bool) (flowRuntimeLaunch, error) {
 	launcher := r.newFlowLauncher(record, command, reasoningEffort)
 	prepared, err := launcher.Preflight(flowlaunch.Request{
 		Record:        record,
 		Phase:         phase,
-		Headless:      true,
+		Headless:      headless,
+		AutoLaunch:    autoLaunch,
 		RejectRunning: true,
 	})
 	if err != nil {
@@ -75,7 +76,7 @@ func (r *mutationResolver) startFlowRuntimeJob(ctx context.Context, record flows
 	}
 	launchContext := result.Context
 	launchContext.Embedded = false
-	launchContext.Headless = true
+	launchContext.Headless = headless
 	launchContext.FlowLaunchTracked = true
 	snapshot, err := r.RuntimeStarter.Start(ctx, runtimejobs.StartRequest{
 		FlowID:   record.FlowID,

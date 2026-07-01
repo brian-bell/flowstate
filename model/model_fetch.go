@@ -486,6 +486,7 @@ func (m Model) createFlowAndLaunchPlanForRepo(repoPath, title, instructions, bas
 			BaseRef:                     baseRef,
 			AgentCommand:                command,
 			ReasoningEffort:             reasoningEffort,
+			Headless:                    headless,
 			SessionStateRoot:            m.sessionStateRoot,
 			FlowPromptTemplates:         m.flowPromptTemplates,
 			FlowPromptTemplatesProvided: true,

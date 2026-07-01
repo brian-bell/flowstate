@@ -114,6 +114,8 @@ type LaunchFlowPhaseInput struct {
 	PhaseID         string  `json:"phaseId"`
 	AgentCommand    *string `json:"agentCommand,omitempty"`
 	ReasoningEffort *string `json:"reasoningEffort,omitempty"`
+	Headless        *bool   `json:"headless,omitempty"`
+	AutoLaunch      *bool   `json:"autoLaunch,omitempty"`
 }
 
 type LaunchFlowPhasePayload struct {
@@ -257,6 +259,7 @@ type StartFlowInput struct {
 	Instructions    string  `json:"instructions"`
 	BaseRef         *string `json:"baseRef,omitempty"`
 	LaunchPlan      bool    `json:"launchPlan"`
+	Headless        *bool   `json:"headless,omitempty"`
 	AgentCommand    *string `json:"agentCommand,omitempty"`
 	ReasoningEffort *string `json:"reasoningEffort,omitempty"`
 }

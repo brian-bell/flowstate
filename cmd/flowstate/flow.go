@@ -15,6 +15,7 @@ import (
 
 	"github.com/brian-bell/flowstate/flowstore"
 	"github.com/brian-bell/flowstate/internal/daemonclient"
+	"github.com/brian-bell/flowstate/internal/daemoncoords"
 )
 
 // runFlow handles `flowstate flow ...` subcommands. It may load config to resolve
@@ -89,8 +90,14 @@ Most commands accept:
 func newFlowDaemonClient(deps runDeps, compatibilityStateRoot string) (daemonclient.FlowClient, error) {
 	newClient := deps.newFlowClient
 	if newClient == nil {
-		newClient = func(string) (daemonclient.FlowClient, error) {
-			return daemonclient.New(daemonclient.Options{})
+		newClient = func(stateRoot string) (daemonclient.FlowClient, error) {
+			opts := daemonclient.Options{}
+			if strings.TrimSpace(stateRoot) != "" {
+				opts.Coords = func() (daemoncoords.Coords, error) {
+					return daemoncoords.ReadForStateRoot(stateRoot)
+				}
+			}
+			return daemonclient.New(opts)
 		}
 	}
 	client, err := newClient(compatibilityStateRoot)

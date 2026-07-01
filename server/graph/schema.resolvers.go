@@ -113,7 +113,7 @@ func (r *mutationResolver) CreateFlowAndLaunchPlan(ctx context.Context, input mo
 	if !flowlaunch.PhaseCanLaunch(record, phase) {
 		return nil, fmt.Errorf("phase %q is not launchable from status %q", phase.PhaseID, phase.Status)
 	}
-	launch, err := r.startFlowRuntimeJob(ctx, record, phase, command, reasoningEffort)
+	launch, err := r.startFlowRuntimeJob(ctx, record, phase, command, reasoningEffort, true, false)
 	if err != nil {
 		var startErr *flowRuntimeStartError
 		if !errors.As(err, &startErr) {
@@ -203,7 +203,11 @@ func (r *mutationResolver) StartFlow(ctx context.Context, input model.StartFlowI
 	if !flowlaunch.PhaseCanLaunch(record, phase) {
 		return nil, fmt.Errorf("phase %q is not launchable from status %q", phase.PhaseID, phase.Status)
 	}
-	launch, err := r.startFlowRuntimeJob(ctx, record, phase, command, reasoningEffort)
+	headless := true
+	if input.Headless != nil {
+		headless = *input.Headless
+	}
+	launch, err := r.startFlowRuntimeJob(ctx, record, phase, command, reasoningEffort, headless, false)
 	if err != nil {
 		var startErr *flowRuntimeStartError
 		if !errors.As(err, &startErr) {
@@ -262,7 +266,15 @@ func (r *mutationResolver) LaunchFlowPhase(ctx context.Context, input model.Laun
 	if err != nil {
 		return nil, err
 	}
-	launch, err := r.startFlowRuntimeJob(ctx, record, phase, command, reasoningEffort)
+	headless := true
+	if input.Headless != nil {
+		headless = *input.Headless
+	}
+	autoLaunch := false
+	if input.AutoLaunch != nil {
+		autoLaunch = *input.AutoLaunch
+	}
+	launch, err := r.startFlowRuntimeJob(ctx, record, phase, command, reasoningEffort, headless, autoLaunch)
 	if err != nil {
 		return nil, err
 	}
