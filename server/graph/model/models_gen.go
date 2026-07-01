@@ -144,6 +144,16 @@ type PullRequest struct {
 type Query struct {
 }
 
+type RawFlowInput struct {
+	RepoPath     string  `json:"repoPath"`
+	Title        string  `json:"title"`
+	Instructions string  `json:"instructions"`
+	WorktreePath *string `json:"worktreePath,omitempty"`
+	Branch       *string `json:"branch,omitempty"`
+	BaseRef      *string `json:"baseRef,omitempty"`
+	Commit       *string `json:"commit,omitempty"`
+}
+
 type RestartFlowPhaseInput struct {
 	FlowID  string  `json:"flowId"`
 	PhaseID string  `json:"phaseId"`

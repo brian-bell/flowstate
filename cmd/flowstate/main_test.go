@@ -702,7 +702,7 @@ func TestModelOptionsFromConfigPassesReasoningEffort(t *testing.T) {
 			CodexReasoningEffort:  "high",
 			ClaudeReasoningEffort: "max",
 		},
-	}, nil, sessionStore, planStore, flowStore)
+	}, nil, sessionStore, planStore, testFlowClient{store: flowStore})
 
 	if opts.CodexReasoningEffort != "high" || opts.ClaudeReasoningEffort != "max" {
 		t.Fatalf("reasoning efforts = codex %q claude %q, want high/max", opts.CodexReasoningEffort, opts.ClaudeReasoningEffort)
@@ -727,7 +727,7 @@ func TestModelOptionsFromConfigMapsDefaultView(t *testing.T) {
 			sessionStore, planStore, flowStore := testArtifactStores(t)
 			opts := modelOptionsFromConfig(config.Config{
 				UI: config.UIConfig{DefaultView: tt.view},
-			}, nil, sessionStore, planStore, flowStore)
+			}, nil, sessionStore, planStore, testFlowClient{store: flowStore})
 
 			if opts.StartupMode != tt.want {
 				t.Fatalf("StartupMode = %v, want %v", opts.StartupMode, tt.want)
@@ -762,7 +762,7 @@ func TestModelOptionsFromConfigPassesTerminalCommandToLaunchers(t *testing.T) {
 	opts := modelOptionsFromConfig(config.Config{
 		Agent:    config.AgentConfig{Command: "codex"},
 		Terminal: config.TerminalConfig{Command: terminalCommand + " --reuse"},
-	}, nil, sessionStore, planStore, flowStore)
+	}, nil, sessionStore, planStore, testFlowClient{store: flowStore})
 
 	terminalLaunch, err := opts.LaunchTerminal("/repo/worktree")
 	if err != nil {
@@ -843,7 +843,7 @@ func TestModelOptionsFromConfigTerminalEnvOverridesConfiguredCommand(t *testing.
 
 	opts := modelOptionsFromConfig(config.Config{
 		Terminal: config.TerminalConfig{Command: configTerminal},
-	}, nil, sessionStore, planStore, flowStore)
+	}, nil, sessionStore, planStore, testFlowClient{store: flowStore})
 
 	launch, err := opts.LaunchTerminal("/repo/worktree")
 	if err != nil {
@@ -873,7 +873,7 @@ func TestModelOptionsFromConfigPassesEditorCommandToEditFile(t *testing.T) {
 
 	opts := modelOptionsFromConfig(config.Config{
 		Editor: config.EditorConfig{Command: editorCommand + " --wait"},
-	}, nil, sessionStore, planStore, flowStore)
+	}, nil, sessionStore, planStore, testFlowClient{store: flowStore})
 
 	launch, err := opts.EditFile("/state/plans/plan-1/plan.md")
 	if err != nil {
@@ -914,7 +914,7 @@ func TestModelOptionsFromConfigPassesFlowPromptTemplates(t *testing.T) {
 			Merge:          "merge",
 			Generic:        "generic",
 		},
-	}, nil, sessionStore, planStore, flowStore)
+	}, nil, sessionStore, planStore, testFlowClient{store: flowStore})
 
 	want := model.FlowPromptTemplates{
 		Plan:           "plan",

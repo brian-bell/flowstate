@@ -496,6 +496,9 @@ func (m Model) createFlowAndLaunchPlanForRepo(repoPath, title, instructions, bas
 		if err != nil {
 			return FlowCreateFailedMsg{RepoPath: repoPath, FlowID: result.Flow.FlowID, Title: title, Err: err.Error()}
 		}
+		if result.DaemonLaunched {
+			return FlowCreatedMsg{RepoPath: repoPath, FlowID: result.Flow.FlowID, Title: title}
+		}
 		return flowPlanLaunchMessage(result.LaunchContext, headless)
 	}
 }

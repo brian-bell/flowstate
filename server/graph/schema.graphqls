@@ -17,6 +17,7 @@ input FlowFilterInput {
 }
 
 type Mutation {
+  createRawFlow(input: RawFlowInput!): Flow!
   createFlow(input: CreateFlowInput!): Flow!
   createFlowAndLaunchPlan(input: CreateFlowAndLaunchPlanInput!): CreateFlowAndLaunchPlanPayload!
   startFlow(input: StartFlowInput!): StartFlowPayload!
@@ -30,6 +31,16 @@ type Mutation {
   setFlowMerge(input: SetFlowMergeInput!): SetFlowMergePayload!
   setFlowAutoMode(input: SetFlowAutoModeInput!): SetFlowAutoModePayload!
   deleteFlow(id: ID!): DeleteFlowPayload!
+}
+
+input RawFlowInput {
+  repoPath: String!
+  title: String!
+  instructions: String!
+  worktreePath: String
+  branch: String
+  baseRef: String
+  commit: String
 }
 
 input CreateFlowInput {

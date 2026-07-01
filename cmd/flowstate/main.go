@@ -18,6 +18,7 @@ import (
 	"github.com/brian-bell/flowstate/config"
 	"github.com/brian-bell/flowstate/flowlaunch"
 	"github.com/brian-bell/flowstate/flowstore"
+	"github.com/brian-bell/flowstate/internal/daemonclient"
 	"github.com/brian-bell/flowstate/internal/version"
 	"github.com/brian-bell/flowstate/model"
 	"github.com/brian-bell/flowstate/planstore"
@@ -42,6 +43,7 @@ type runDeps struct {
 	startProgram            func([]scanner.Repo, config.Config) error
 	startProgramWithOptions func([]scanner.Repo, startProgramOptions) error
 	serve                   func(context.Context, serveOptions) error
+	newFlowClient           func(string) (daemonclient.FlowClient, error)
 	stdin                   io.Reader
 	stdout                  io.Writer
 }
@@ -253,6 +255,11 @@ func fillRunDeps(deps runDeps) runDeps {
 	if deps.serve == nil {
 		deps.serve = server.Run
 	}
+	if deps.newFlowClient == nil {
+		deps.newFlowClient = func(string) (daemonclient.FlowClient, error) {
+			return daemonclient.New(daemonclient.Options{})
+		}
+	}
 	if deps.stdin == nil {
 		deps.stdin = os.Stdin
 	}
@@ -382,18 +389,18 @@ func startProgram(repos []scanner.Repo, opts startProgramOptions) error {
 	if err != nil {
 		return err
 	}
-	flowStore, err := flowstore.NewStore(flowstore.StoreOptions{Root: sessionStore.Root()})
+	flowClient, err := daemonclient.New(daemonclient.Options{})
 	if err != nil {
 		return err
 	}
-	modelOpts := modelOptionsFromConfig(cfg, opts.ScanRepos, sessionStore, planStore, flowStore)
+	modelOpts := modelOptionsFromConfig(cfg, opts.ScanRepos, sessionStore, planStore, flowClient)
 	modelOpts.RepoCreateRoot = opts.RepoCreateRoot
 	p := tea.NewProgram(model.NewWithOptions(repos, modelOpts), tea.WithAltScreen())
 	_, err = p.Run()
 	return err
 }
 
-func modelOptionsFromConfig(cfg config.Config, scanRepos func() ([]scanner.Repo, error), sessionStore *sessions.Store, planStore *planstore.Store, flowStore *flowstore.Store) model.Options {
+func modelOptionsFromConfig(cfg config.Config, scanRepos func() ([]scanner.Repo, error), sessionStore *sessions.Store, planStore *planstore.Store, flowClient daemonclient.FlowClient) model.Options {
 	launchOpts := actions.LaunchOptions{TerminalCommand: cfg.Terminal.Command}
 	startupMode := ui.ModeFlows
 	if cfg.UI.DefaultView != nil {
@@ -422,8 +429,53 @@ func modelOptionsFromConfig(cfg config.Config, scanRepos func() ([]scanner.Repo,
 		ListSessions:     sessionStore.List,
 		ReadTranscript:   sessionStore.ReadTranscript,
 		ListPlans:        planStore.List,
-		ListFlows:        flowStore.List,
-		ReadPlan:         planStore.ReadPlan,
+		ListFlows: func(filter flowstore.FlowFilter) ([]flowstore.FlowRecord, error) {
+			return flowClient.ListFlows(context.Background(), filter)
+		},
+		CreateFlow: func(req model.FlowStartRequest) (model.FlowStartResult, error) {
+			result, err := flowClient.StartFlow(context.Background(), daemonclient.StartFlowInput{
+				RepoPath:     req.RepoPath,
+				Title:        req.Title,
+				Instructions: req.Instructions,
+				BaseRef:      req.BaseRef,
+				LaunchPlan:   false,
+			})
+			if err != nil {
+				return model.FlowStartResult{}, err
+			}
+			return model.FlowStartResult{Flow: result.Flow}, nil
+		},
+		StartFlowPlan: func(req model.FlowStartRequest) (model.FlowStartResult, error) {
+			result, err := flowClient.StartFlow(context.Background(), daemonclient.StartFlowInput{
+				RepoPath:        req.RepoPath,
+				Title:           req.Title,
+				Instructions:    req.Instructions,
+				BaseRef:         req.BaseRef,
+				LaunchPlan:      true,
+				AgentCommand:    req.AgentCommand,
+				ReasoningEffort: req.ReasoningEffort,
+			})
+			if err != nil {
+				return model.FlowStartResult{}, err
+			}
+			return model.FlowStartResult{
+				Flow:           result.Flow,
+				LaunchID:       result.LaunchID,
+				DaemonLaunched: result.LaunchID != "" || result.Job != nil || result.LaunchError != "",
+			}, nil
+		},
+		SetFlowPhase: func(update flowstore.PhaseUpdate) (flowstore.FlowRecord, error) {
+			record, _, err := flowClient.SetPhase(context.Background(), update)
+			return record, err
+		},
+		SetFlowAutoMode: func(update flowstore.AutoModeUpdate) (flowstore.FlowRecord, error) {
+			return flowClient.SetFlowAutoMode(context.Background(), update)
+		},
+		DeleteFlow: func(flowID string) error {
+			_, err := flowClient.DeleteFlow(context.Background(), flowID)
+			return err
+		},
+		ReadPlan: planStore.ReadPlan,
 		LaunchTerminal: func(path string) (actions.TerminalLaunchSpec, error) {
 			return actions.TerminalLaunchWithOptions(path, launchOpts)
 		},

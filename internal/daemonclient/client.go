@@ -55,6 +55,9 @@ type Client struct {
 type FlowClient interface {
 	ListFlows(context.Context, flowstore.FlowFilter) ([]flowstore.FlowRecord, error)
 	ReadFlow(context.Context, string) (flowstore.FlowRecord, error)
+	ListFlowViews(context.Context, flowstore.FlowFilter) ([]FlowView, error)
+	ReadFlowView(context.Context, string) (FlowView, error)
+	CreateRawFlow(context.Context, flowstore.FlowRecord) (flowstore.FlowRecord, error)
 	SetPhase(context.Context, flowstore.PhaseUpdate) (flowstore.FlowRecord, flowstore.FlowPhase, error)
 	RestartFlowPhase(context.Context, flowstore.PhaseRestartUpdate) (flowstore.FlowRecord, flowstore.FlowPhase, error)
 	AddFlowChildPhase(context.Context, flowstore.ChildPhaseUpdate) (flowstore.FlowRecord, flowstore.FlowPhase, error)
@@ -64,6 +67,8 @@ type FlowClient interface {
 	SetFlowAutoMode(context.Context, flowstore.AutoModeUpdate) (flowstore.FlowRecord, error)
 	DeleteFlow(context.Context, string) (string, error)
 	StartFlow(context.Context, StartFlowInput) (StartFlowResult, error)
+	LaunchFlowPhase(context.Context, string, string, string, string) (LaunchFlowPhaseResult, error)
+	CancelRuntimeJob(context.Context, string) (RuntimeJob, error)
 }
 
 var _ FlowClient = (*Client)(nil)
@@ -83,6 +88,18 @@ type StartFlowResult struct {
 	LaunchID    string
 	Job         *RuntimeJob
 	LaunchError string
+}
+
+type FlowView struct {
+	Record      flowstore.FlowRecord
+	RuntimeJobs map[string]RuntimeJob
+}
+
+type LaunchFlowPhaseResult struct {
+	FlowID   string
+	PhaseID  string
+	LaunchID string
+	Job      RuntimeJob
 }
 
 type RuntimeJob struct {
@@ -176,6 +193,26 @@ func graphqlEndpoint(raw string) (string, error) {
 }
 
 func (c *Client) ListFlows(ctx context.Context, filter flowstore.FlowFilter) ([]flowstore.FlowRecord, error) {
+	views, err := c.ListFlowViews(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+	records := make([]flowstore.FlowRecord, 0, len(views))
+	for _, view := range views {
+		records = append(records, view.Record)
+	}
+	return records, nil
+}
+
+func (c *Client) ReadFlow(ctx context.Context, flowID string) (flowstore.FlowRecord, error) {
+	view, err := c.ReadFlowView(ctx, flowID)
+	if err != nil {
+		return flowstore.FlowRecord{}, err
+	}
+	return view.Record, nil
+}
+
+func (c *Client) ListFlowViews(ctx context.Context, filter flowstore.FlowFilter) ([]FlowView, error) {
 	vars := map[string]any{"filter": nil}
 	if strings.TrimSpace(filter.RepoPath) != "" {
 		vars["filter"] = map[string]any{"repoPath": filter.RepoPath}
@@ -186,24 +223,51 @@ func (c *Client) ListFlows(ctx context.Context, filter flowstore.FlowFilter) ([]
 	if err := c.query(ctx, listFlowsQuery, vars, &data); err != nil {
 		return nil, err
 	}
-	records := make([]flowstore.FlowRecord, 0, len(data.Flows))
+	views := make([]FlowView, 0, len(data.Flows))
 	for _, dto := range data.Flows {
-		records = append(records, dto.record())
+		views = append(views, dto.view())
 	}
-	return records, nil
+	return views, nil
 }
 
-func (c *Client) ReadFlow(ctx context.Context, flowID string) (flowstore.FlowRecord, error) {
+func (c *Client) ReadFlowView(ctx context.Context, flowID string) (FlowView, error) {
 	var data struct {
 		Flow *flowDTO `json:"flow"`
 	}
 	if err := c.query(ctx, readFlowQuery, map[string]any{"id": flowID}, &data); err != nil {
-		return flowstore.FlowRecord{}, err
+		return FlowView{}, err
 	}
 	if data.Flow == nil {
-		return flowstore.FlowRecord{}, fmt.Errorf("flow %q not found: %w", flowID, flowstore.ErrFlowNotFound)
+		return FlowView{}, fmt.Errorf("flow %q not found: %w", flowID, flowstore.ErrFlowNotFound)
 	}
-	return data.Flow.record(), nil
+	return data.Flow.view(), nil
+}
+
+func (c *Client) CreateRawFlow(ctx context.Context, record flowstore.FlowRecord) (flowstore.FlowRecord, error) {
+	input := map[string]any{
+		"repoPath":     record.RepoPath,
+		"title":        record.Title,
+		"instructions": record.Instructions,
+	}
+	if record.WorktreePath != "" {
+		input["worktreePath"] = record.WorktreePath
+	}
+	if record.Branch != "" {
+		input["branch"] = record.Branch
+	}
+	if record.BaseRef != "" {
+		input["baseRef"] = record.BaseRef
+	}
+	if record.Commit != "" {
+		input["commit"] = record.Commit
+	}
+	var data struct {
+		CreateRawFlow flowDTO `json:"createRawFlow"`
+	}
+	if err := c.mutation(ctx, createRawFlowMutation, map[string]any{"input": input}, &data); err != nil {
+		return flowstore.FlowRecord{}, err
+	}
+	return data.CreateRawFlow.record(), nil
 }
 
 func (c *Client) SetPhase(ctx context.Context, update flowstore.PhaseUpdate) (flowstore.FlowRecord, flowstore.FlowPhase, error) {
@@ -396,6 +460,43 @@ func (c *Client) StartFlow(ctx context.Context, input StartFlowInput) (StartFlow
 		result.LaunchID = *data.StartFlow.LaunchID
 	}
 	return result, nil
+}
+
+func (c *Client) LaunchFlowPhase(ctx context.Context, flowID, phaseID, agentCommand, reasoningEffort string) (LaunchFlowPhaseResult, error) {
+	input := map[string]any{"flowId": flowID, "phaseId": phaseID}
+	if strings.TrimSpace(agentCommand) != "" {
+		input["agentCommand"] = agentCommand
+	}
+	if strings.TrimSpace(reasoningEffort) != "" {
+		input["reasoningEffort"] = reasoningEffort
+	}
+	var data struct {
+		LaunchFlowPhase struct {
+			FlowID   string     `json:"flowId"`
+			PhaseID  string     `json:"phaseId"`
+			LaunchID string     `json:"launchId"`
+			Job      RuntimeJob `json:"job"`
+		} `json:"launchFlowPhase"`
+	}
+	if err := c.mutation(ctx, launchFlowPhaseMutation, map[string]any{"input": input}, &data); err != nil {
+		return LaunchFlowPhaseResult{}, err
+	}
+	return LaunchFlowPhaseResult{
+		FlowID:   data.LaunchFlowPhase.FlowID,
+		PhaseID:  data.LaunchFlowPhase.PhaseID,
+		LaunchID: data.LaunchFlowPhase.LaunchID,
+		Job:      data.LaunchFlowPhase.Job,
+	}, nil
+}
+
+func (c *Client) CancelRuntimeJob(ctx context.Context, jobID string) (RuntimeJob, error) {
+	var data struct {
+		CancelRuntimeJob RuntimeJob `json:"cancelRuntimeJob"`
+	}
+	if err := c.mutation(ctx, cancelRuntimeJobMutation, map[string]any{"id": jobID}, &data); err != nil {
+		return RuntimeJob{}, err
+	}
+	return data.CancelRuntimeJob, nil
 }
 
 func (c *Client) query(ctx context.Context, query string, variables map[string]any, out any) error {
@@ -599,20 +700,31 @@ func (dto flowDTO) record() flowstore.FlowRecord {
 	}
 }
 
+func (dto flowDTO) view() FlowView {
+	jobs := make(map[string]RuntimeJob)
+	for _, phase := range dto.Phases {
+		if phase.ActiveRuntimeJob != nil {
+			jobs[normalizePhaseID(phase.PhaseID)] = *phase.ActiveRuntimeJob
+		}
+	}
+	return FlowView{Record: dto.record(), RuntimeJobs: jobs}
+}
+
 type flowPhaseDTO struct {
-	PhaseID       string       `json:"phaseId"`
-	ParentPhaseID string       `json:"parentPhaseId"`
-	Title         string       `json:"title"`
-	Kind          string       `json:"kind"`
-	StatusRaw     string       `json:"statusRaw"`
-	Order         int          `json:"order"`
-	Outcome       string       `json:"outcome"`
-	Notes         string       `json:"notes"`
-	Summary       string       `json:"summary"`
-	LaunchIDs     []string     `json:"launchIds"`
-	Sessions      []sessionDTO `json:"sessions"`
-	CreatedAt     time.Time    `json:"createdAt"`
-	UpdatedAt     time.Time    `json:"updatedAt"`
+	PhaseID          string       `json:"phaseId"`
+	ParentPhaseID    string       `json:"parentPhaseId"`
+	Title            string       `json:"title"`
+	Kind             string       `json:"kind"`
+	StatusRaw        string       `json:"statusRaw"`
+	Order            int          `json:"order"`
+	Outcome          string       `json:"outcome"`
+	Notes            string       `json:"notes"`
+	Summary          string       `json:"summary"`
+	LaunchIDs        []string     `json:"launchIds"`
+	Sessions         []sessionDTO `json:"sessions"`
+	CreatedAt        time.Time    `json:"createdAt"`
+	UpdatedAt        time.Time    `json:"updatedAt"`
+	ActiveRuntimeJob *RuntimeJob  `json:"activeRuntimeJob"`
 }
 
 func (dto flowPhaseDTO) phase() flowstore.FlowPhase {
@@ -635,6 +747,10 @@ func (dto flowPhaseDTO) phase() flowstore.FlowPhase {
 		CreatedAt:     dto.CreatedAt,
 		UpdatedAt:     dto.UpdatedAt,
 	}
+}
+
+func normalizePhaseID(phaseID string) string {
+	return strings.ToLower(strings.TrimSpace(phaseID))
 }
 
 type sessionDTO struct {
@@ -726,6 +842,10 @@ phases {
 	summary
 	launchIds
 	sessions { provider sessionId launchId status startedAt endedAt transcriptPath }
+	activeRuntimeJob {
+		id launchId flowId phaseId status createdAt startedAt endedAt exitCode
+		error phaseUpdateError logTail logTruncated
+	}
 	createdAt
 	updatedAt
 }`
@@ -742,12 +862,20 @@ const readFlowQuery = `query($id: ID!) {
 	}
 }`
 
+const createRawFlowMutation = `mutation($input: RawFlowInput!) {
+	createRawFlow(input: $input) { ` + flowFields + ` }
+}`
+
 const setFlowPhaseStatusMutation = `mutation($input: SetFlowPhaseStatusInput!) {
 	setFlowPhaseStatus(input: $input) {
 		flow { ` + flowFields + ` }
 		phase {
 			phaseId parentPhaseId title kind statusRaw order outcome notes summary launchIds
 			sessions { provider sessionId launchId status startedAt endedAt transcriptPath }
+			activeRuntimeJob {
+				id launchId flowId phaseId status createdAt startedAt endedAt exitCode
+				error phaseUpdateError logTail logTruncated
+			}
 			createdAt updatedAt
 		}
 	}
@@ -759,6 +887,10 @@ const restartFlowPhaseMutation = `mutation($input: RestartFlowPhaseInput!) {
 		phase {
 			phaseId parentPhaseId title kind statusRaw order outcome notes summary launchIds
 			sessions { provider sessionId launchId status startedAt endedAt transcriptPath }
+			activeRuntimeJob {
+				id launchId flowId phaseId status createdAt startedAt endedAt exitCode
+				error phaseUpdateError logTail logTruncated
+			}
 			createdAt updatedAt
 		}
 	}
@@ -770,6 +902,10 @@ const addFlowChildPhaseMutation = `mutation($input: AddFlowChildPhaseInput!) {
 		phase {
 			phaseId parentPhaseId title kind statusRaw order outcome notes summary launchIds
 			sessions { provider sessionId launchId status startedAt endedAt transcriptPath }
+			activeRuntimeJob {
+				id launchId flowId phaseId status createdAt startedAt endedAt exitCode
+				error phaseUpdateError logTail logTruncated
+			}
 			createdAt updatedAt
 		}
 	}
@@ -810,5 +946,24 @@ const startFlowMutation = `mutation($input: StartFlowInput!) {
 			id launchId flowId phaseId status createdAt startedAt endedAt exitCode
 			error phaseUpdateError logTail logTruncated
 		}
+	}
+}`
+
+const launchFlowPhaseMutation = `mutation($input: LaunchFlowPhaseInput!) {
+	launchFlowPhase(input: $input) {
+		flowId
+		phaseId
+		launchId
+		job {
+			id launchId flowId phaseId status createdAt startedAt endedAt exitCode
+			error phaseUpdateError logTail logTruncated
+		}
+	}
+}`
+
+const cancelRuntimeJobMutation = `mutation($id: ID!) {
+	cancelRuntimeJob(id: $id) {
+		id launchId flowId phaseId status createdAt startedAt endedAt exitCode
+		error phaseUpdateError logTail logTruncated
 	}
 }`

@@ -125,6 +125,7 @@ type ComplexityRoot struct {
 		CancelRuntimeJob        func(childComplexity int, id string) int
 		CreateFlow              func(childComplexity int, input model.CreateFlowInput) int
 		CreateFlowAndLaunchPlan func(childComplexity int, input model.CreateFlowAndLaunchPlanInput) int
+		CreateRawFlow           func(childComplexity int, input model.RawFlowInput) int
 		DeleteFlow              func(childComplexity int, id string) int
 		LaunchFlowPhase         func(childComplexity int, input model.LaunchFlowPhaseInput) int
 		RestartFlowPhase        func(childComplexity int, input model.RestartFlowPhaseInput) int
@@ -208,6 +209,7 @@ type ComplexityRoot struct {
 // region    ************************** generated!.gotpl **************************
 
 type MutationResolver interface {
+	CreateRawFlow(ctx context.Context, input model.RawFlowInput) (*model.Flow, error)
 	CreateFlow(ctx context.Context, input model.CreateFlowInput) (*model.Flow, error)
 	CreateFlowAndLaunchPlan(ctx context.Context, input model.CreateFlowAndLaunchPlanInput) (*model.CreateFlowAndLaunchPlanPayload, error)
 	StartFlow(ctx context.Context, input model.StartFlowInput) (*model.StartFlowPayload, error)
@@ -652,6 +654,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.CreateFlowAndLaunchPlan(childComplexity, args["input"].(model.CreateFlowAndLaunchPlanInput)), true
+	case "Mutation.createRawFlow":
+		if e.ComplexityRoot.Mutation.CreateRawFlow == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_createRawFlow_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.CreateRawFlow(childComplexity, args["input"].(model.RawFlowInput)), true
 	case "Mutation.deleteFlow":
 		if e.ComplexityRoot.Mutation.DeleteFlow == nil {
 			break
@@ -1001,6 +1014,7 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputCreateFlowInput,
 		ec.unmarshalInputFlowFilterInput,
 		ec.unmarshalInputLaunchFlowPhaseInput,
+		ec.unmarshalInputRawFlowInput,
 		ec.unmarshalInputRestartFlowPhaseInput,
 		ec.unmarshalInputSetFlowAutoModeInput,
 		ec.unmarshalInputSetFlowMergeInput,
@@ -1102,6 +1116,7 @@ input FlowFilterInput {
 }
 
 type Mutation {
+  createRawFlow(input: RawFlowInput!): Flow!
   createFlow(input: CreateFlowInput!): Flow!
   createFlowAndLaunchPlan(input: CreateFlowAndLaunchPlanInput!): CreateFlowAndLaunchPlanPayload!
   startFlow(input: StartFlowInput!): StartFlowPayload!
@@ -1115,6 +1130,16 @@ type Mutation {
   setFlowMerge(input: SetFlowMergeInput!): SetFlowMergePayload!
   setFlowAutoMode(input: SetFlowAutoModeInput!): SetFlowAutoModePayload!
   deleteFlow(id: ID!): DeleteFlowPayload!
+}
+
+input RawFlowInput {
+  repoPath: String!
+  title: String!
+  instructions: String!
+  worktreePath: String
+  branch: String
+  baseRef: String
+  commit: String
 }
 
 input CreateFlowInput {
@@ -1835,6 +1860,20 @@ func (ec *executionContext) field_Mutation_createFlow_args(ctx context.Context, 
 	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input",
 		func(ctx context.Context, v any) (model.CreateFlowInput, error) {
 			return ec.unmarshalNCreateFlowInput2githubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐCreateFlowInput(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["input"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Mutation_createRawFlow_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input",
+		func(ctx context.Context, v any) (model.RawFlowInput, error) {
+			return ec.unmarshalNRawFlowInput2githubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐRawFlowInput(ctx, v)
 		})
 	if err != nil {
 		return nil, err
@@ -3533,6 +3572,50 @@ func (ec *executionContext) _Merge_mergedAt(ctx context.Context, field graphql.C
 }
 func (ec *executionContext) fieldContext_Merge_mergedAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("Merge", field, false, false, errors.New("field of type Time does not have child fields"))
+}
+
+func (ec *executionContext) _Mutation_createRawFlow(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Mutation_createRawFlow(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().CreateRawFlow(ctx, fc.Args["input"].(model.RawFlowInput))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.Flow) graphql.Marshaler {
+			return ec.marshalNFlow2ᚖgithubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐFlow(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Mutation_createRawFlow(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_Flow(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_createRawFlow_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
 }
 
 func (ec *executionContext) _Mutation_createFlow(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
@@ -6482,6 +6565,78 @@ func (ec *executionContext) unmarshalInputLaunchFlowPhaseInput(ctx context.Conte
 	return it, nil
 }
 
+func (ec *executionContext) unmarshalInputRawFlowInput(ctx context.Context, obj any) (model.RawFlowInput, error) {
+	var it model.RawFlowInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"repoPath", "title", "instructions", "worktreePath", "branch", "baseRef", "commit"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "repoPath":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("repoPath"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.RepoPath = data
+		case "title":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("title"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Title = data
+		case "instructions":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("instructions"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Instructions = data
+		case "worktreePath":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("worktreePath"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.WorktreePath = data
+		case "branch":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("branch"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Branch = data
+		case "baseRef":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("baseRef"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.BaseRef = data
+		case "commit":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("commit"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Commit = data
+		}
+	}
+	return it, nil
+}
+
 func (ec *executionContext) unmarshalInputRestartFlowPhaseInput(ctx context.Context, obj any) (model.RestartFlowPhaseInput, error) {
 	var it model.RestartFlowPhaseInput
 	if obj == nil {
@@ -7454,6 +7609,13 @@ func (ec *executionContext) _Mutation(ctx context.Context, sel ast.SelectionSet)
 		switch field.Name {
 		case "__typename":
 			out.Values[i] = graphql.MarshalString("Mutation")
+		case "createRawFlow":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_createRawFlow(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		case "createFlow":
 			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
 				return ec._Mutation_createFlow(ctx, field)
@@ -8826,6 +8988,11 @@ func (ec *executionContext) marshalNPullRequest2ᚖgithubᚗcomᚋbrianᚑbell�
 		return graphql.Null
 	}
 	return ec._PullRequest(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNRawFlowInput2githubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐRawFlowInput(ctx context.Context, v any) (model.RawFlowInput, error) {
+	res, err := ec.unmarshalInputRawFlowInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
 }
 
 func (ec *executionContext) unmarshalNRestartFlowPhaseInput2githubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐRestartFlowPhaseInput(ctx context.Context, v any) (model.RestartFlowPhaseInput, error) {

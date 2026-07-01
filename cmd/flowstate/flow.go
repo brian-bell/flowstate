@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -12,6 +14,7 @@ import (
 	"time"
 
 	"github.com/brian-bell/flowstate/flowstore"
+	"github.com/brian-bell/flowstate/internal/daemonclient"
 )
 
 // runFlow handles `flowstate flow ...` subcommands. It may load config to resolve
@@ -83,35 +86,31 @@ Most commands accept:
   --state-root PATH  Override the artifact state root after the leaf command.
 `
 
-// resolveFlowRoot applies the documented precedence:
-// --state-root > FLOWSTATE_FLOW_STATE_ROOT > FLOWSTATE_PLAN_STATE_ROOT >
-// FLOWSTATE_SESSION_STATE_ROOT > [sessions].root from config > flowstore.DefaultRoot().
-func resolveFlowRoot(stateRoot string, deps runDeps) (string, error) {
-	if stateRoot != "" {
-		return stateRoot, nil
+func newFlowDaemonClient(deps runDeps, compatibilityStateRoot string) (daemonclient.FlowClient, error) {
+	newClient := deps.newFlowClient
+	if newClient == nil {
+		newClient = func(string) (daemonclient.FlowClient, error) {
+			return daemonclient.New(daemonclient.Options{})
+		}
 	}
-	if root := deps.getenv("FLOWSTATE_FLOW_STATE_ROOT"); root != "" {
-		return root, nil
-	}
-	if root := deps.getenv("FLOWSTATE_PLAN_STATE_ROOT"); root != "" {
-		return root, nil
-	}
-	if root := deps.getenv("FLOWSTATE_SESSION_STATE_ROOT"); root != "" {
-		return root, nil
-	}
-	cfg, err := deps.loadConfig()
+	client, err := newClient(compatibilityStateRoot)
 	if err != nil {
-		return "", fmt.Errorf("error loading config: %w", err)
+		return nil, fmt.Errorf("flow daemon unavailable: %w", err)
 	}
-	return cfg.Sessions.Root, nil
+	return client, nil
 }
 
-func newFlowStore(stateRoot string, deps runDeps) (*flowstore.Store, error) {
-	root, err := resolveFlowRoot(stateRoot, deps)
-	if err != nil {
-		return nil, err
+func flowDaemonError(err error) error {
+	if err == nil {
+		return nil
 	}
-	return flowstore.NewStore(flowstore.StoreOptions{Root: root})
+	if errors.Is(err, daemonclient.ErrUnauthorized) {
+		return fmt.Errorf("flow daemon unauthorized: %w", err)
+	}
+	if errors.Is(err, daemonclient.ErrUnavailable) {
+		return fmt.Errorf("flow daemon unavailable: %w", err)
+	}
+	return err
 }
 
 func runFlowCreate(args []string, deps runDeps) error {
@@ -150,11 +149,11 @@ func runFlowCreate(args []string, deps runDeps) error {
 	if err != nil {
 		return err
 	}
-	store, err := newFlowStore(*stateRoot, deps)
+	client, err := newFlowDaemonClient(deps, *stateRoot)
 	if err != nil {
 		return err
 	}
-	record, err := store.Create(flowstore.FlowRecord{
+	record, err := client.CreateRawFlow(context.Background(), flowstore.FlowRecord{
 		Title:        *title,
 		Instructions: body,
 		RepoPath:     *repoPath,
@@ -164,7 +163,7 @@ func runFlowCreate(args []string, deps runDeps) error {
 		Commit:       *commit,
 	})
 	if err != nil {
-		return err
+		return flowDaemonError(err)
 	}
 	return writeFlowJSON(deps.stdout, record)
 }
@@ -208,13 +207,13 @@ func runFlowList(args []string, deps runDeps) error {
 	if !*asJSON {
 		return fmt.Errorf("flow list requires --json in v1")
 	}
-	store, err := newFlowStore(*stateRoot, deps)
+	client, err := newFlowDaemonClient(deps, *stateRoot)
 	if err != nil {
 		return err
 	}
-	records, err := store.List(flowstore.FlowFilter{RepoPath: *repoPath})
+	records, err := client.ListFlows(context.Background(), flowstore.FlowFilter{RepoPath: *repoPath})
 	if err != nil {
-		return err
+		return flowDaemonError(err)
 	}
 	if records == nil {
 		records = []flowstore.FlowRecord{}
@@ -254,13 +253,13 @@ func runFlowRead(args []string, deps runDeps) error {
 	if *flowID == "" {
 		return fmt.Errorf("flow read requires --flow-id")
 	}
-	store, err := newFlowStore(*stateRoot, deps)
+	client, err := newFlowDaemonClient(deps, *stateRoot)
 	if err != nil {
 		return err
 	}
-	record, err := store.Read(*flowID)
+	record, err := client.ReadFlow(context.Background(), *flowID)
 	if err != nil {
-		return err
+		return flowDaemonError(err)
 	}
 	return writeFlowJSON(deps.stdout, record)
 }
@@ -410,11 +409,11 @@ func runFlowPhaseSet(args []string, deps runDeps) error {
 		return fmt.Errorf("unsupported agent-facing phase status %q; valid statuses: %s",
 			*status, strings.Join(flowstore.AgentSettablePhaseStatuses(), ", "))
 	}
-	store, err := newFlowStore(*stateRoot, deps)
+	client, err := newFlowDaemonClient(deps, *stateRoot)
 	if err != nil {
 		return err
 	}
-	record, err := store.SetPhase(flowstore.PhaseUpdate{
+	record, _, err := client.SetPhase(context.Background(), flowstore.PhaseUpdate{
 		FlowID:  *flowID,
 		PhaseID: *phaseID,
 		Status:  *status,
@@ -423,7 +422,7 @@ func runFlowPhaseSet(args []string, deps runDeps) error {
 		Summary: *summary,
 	})
 	if err != nil {
-		return err
+		return flowDaemonError(err)
 	}
 	return writeFlowJSON(deps.stdout, record)
 }
@@ -476,11 +475,11 @@ func runFlowPhaseAction(args []string, deps runDeps, spec flowPhaseActionSpec) e
 	if actionOutcome == "" {
 		actionOutcome = defaultFlowPhaseActionOutcome(normalizeFlowPhaseID(*phaseID), spec)
 	}
-	store, err := newFlowStore(*stateRoot, deps)
+	client, err := newFlowDaemonClient(deps, *stateRoot)
 	if err != nil {
 		return err
 	}
-	record, err := store.SetPhase(flowstore.PhaseUpdate{
+	record, updated, err := client.SetPhase(context.Background(), flowstore.PhaseUpdate{
 		FlowID:  *flowID,
 		PhaseID: *phaseID,
 		Status:  spec.status,
@@ -489,11 +488,7 @@ func runFlowPhaseAction(args []string, deps runDeps, spec flowPhaseActionSpec) e
 		Summary: *summary,
 	})
 	if err != nil {
-		return err
-	}
-	updated, ok := flowPhaseByID(record, *phaseID)
-	if !ok {
-		return fmt.Errorf("phase %q not found in updated flow %q", *phaseID, *flowID)
+		return flowDaemonError(err)
 	}
 	return writeFlowJSON(deps.stdout, flowPhaseActionResult{
 		FlowID:       record.FlowID,
@@ -541,7 +536,7 @@ func runFlowPhaseRestart(args []string, deps runDeps) error {
 	if *phaseID == "" {
 		return fmt.Errorf("flow phase restart requires --phase-id")
 	}
-	store, err := newFlowStore(*stateRoot, deps)
+	client, err := newFlowDaemonClient(deps, *stateRoot)
 	if err != nil {
 		return err
 	}
@@ -549,17 +544,13 @@ func runFlowPhaseRestart(args []string, deps runDeps) error {
 	if note == "" {
 		note = fmt.Sprintf("Rerunning %s after addressing prior findings.", defaultPhaseTitle(*phaseID))
 	}
-	record, err := store.RestartPhase(flowstore.PhaseRestartUpdate{
+	record, updated, err := client.RestartFlowPhase(context.Background(), flowstore.PhaseRestartUpdate{
 		FlowID:  *flowID,
 		PhaseID: *phaseID,
 		Notes:   note,
 	})
 	if err != nil {
-		return err
-	}
-	updated, ok := flowPhaseByID(record, *phaseID)
-	if !ok {
-		return fmt.Errorf("phase %q not found in updated flow %q", *phaseID, *flowID)
+		return flowDaemonError(err)
 	}
 	return writeFlowJSON(deps.stdout, flowPhaseActionResult{
 		FlowID:       record.FlowID,
@@ -744,11 +735,11 @@ func runFlowPhaseAddChild(args []string, deps runDeps) error {
 	if *order < 1 {
 		return fmt.Errorf("flow phase add-child requires positive --order")
 	}
-	store, err := newFlowStore(*stateRoot, deps)
+	client, err := newFlowDaemonClient(deps, *stateRoot)
 	if err != nil {
 		return err
 	}
-	record, err := store.AddChildPhase(flowstore.ChildPhaseUpdate{
+	record, _, err := client.AddFlowChildPhase(context.Background(), flowstore.ChildPhaseUpdate{
 		FlowID:        *flowID,
 		ParentPhaseID: *parentPhaseID,
 		PhaseID:       *phaseID,
@@ -756,7 +747,7 @@ func runFlowPhaseAddChild(args []string, deps runDeps) error {
 		Order:         *order,
 	})
 	if err != nil {
-		return err
+		return flowDaemonError(err)
 	}
 	return writeFlowJSON(deps.stdout, record)
 }
@@ -827,17 +818,17 @@ func runFlowPlanSet(args []string, deps runDeps) error {
 	if *planID == "" {
 		return fmt.Errorf("flow plan set requires --plan-id")
 	}
-	store, err := newFlowStore(*stateRoot, deps)
+	client, err := newFlowDaemonClient(deps, *stateRoot)
 	if err != nil {
 		return err
 	}
-	record, err := store.SetPlanLink(flowstore.PlanLinkUpdate{
+	record, err := client.SetFlowPlanLink(context.Background(), flowstore.PlanLinkUpdate{
 		FlowID:   *flowID,
 		PlanID:   *planID,
 		PlanPath: *planPath,
 	})
 	if err != nil {
-		return err
+		return flowDaemonError(err)
 	}
 	return writeFlowJSON(deps.stdout, record)
 }
@@ -919,11 +910,11 @@ func runFlowPRSet(args []string, deps runDeps) error {
 	if *base == "" {
 		return fmt.Errorf("flow pr set requires --base")
 	}
-	store, err := newFlowStore(*stateRoot, deps)
+	client, err := newFlowDaemonClient(deps, *stateRoot)
 	if err != nil {
 		return err
 	}
-	record, err := store.SetPR(flowstore.PRUpdate{
+	record, _, err := client.SetFlowPR(context.Background(), flowstore.PRUpdate{
 		FlowID:     *flowID,
 		Provider:   *provider,
 		Number:     *number,
@@ -933,7 +924,7 @@ func runFlowPRSet(args []string, deps runDeps) error {
 		Status:     *status,
 	})
 	if err != nil {
-		return err
+		return flowDaemonError(err)
 	}
 	return writeFlowJSON(deps.stdout, record)
 }
@@ -1021,18 +1012,18 @@ func runFlowMergeSet(args []string, deps runDeps) error {
 			return fmt.Errorf("invalid --merged-at: %w", err)
 		}
 	}
-	store, err := newFlowStore(*stateRoot, deps)
+	client, err := newFlowDaemonClient(deps, *stateRoot)
 	if err != nil {
 		return err
 	}
-	record, err := store.SetMerge(flowstore.MergeUpdate{
+	record, _, err := client.SetFlowMerge(context.Background(), flowstore.MergeUpdate{
 		FlowID:   *flowID,
 		Status:   *status,
 		Commit:   *commit,
 		MergedAt: parsedMergedAt,
 	})
 	if err != nil {
-		return err
+		return flowDaemonError(err)
 	}
 	return writeFlowJSON(deps.stdout, record)
 }

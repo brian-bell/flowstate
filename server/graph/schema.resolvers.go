@@ -20,6 +20,35 @@ import (
 	"github.com/brian-bell/flowstate/server/runtimejobs"
 )
 
+// CreateRawFlow is the resolver for the createRawFlow field.
+func (r *mutationResolver) CreateRawFlow(ctx context.Context, input model.RawFlowInput) (*model.Flow, error) {
+	_ = ctx
+	if r.FlowStore == nil {
+		return nil, fmt.Errorf("flow store is not configured")
+	}
+	record, err := r.FlowStore.Create(flowstore.FlowRecord{
+		Title:        input.Title,
+		Instructions: input.Instructions,
+		RepoPath:     input.RepoPath,
+		WorktreePath: optionalString(input.WorktreePath),
+		Branch:       optionalString(input.Branch),
+		BaseRef:      optionalString(input.BaseRef),
+		Commit:       optionalString(input.Commit),
+	})
+	if err != nil {
+		return nil, err
+	}
+	view := r.flowView(record)
+	return flowToGraphQL(view), nil
+}
+
+func optionalString(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
 // CreateFlow is the resolver for the createFlow field.
 func (r *mutationResolver) CreateFlow(ctx context.Context, input model.CreateFlowInput) (*model.Flow, error) {
 	if r.FlowCreator == nil {

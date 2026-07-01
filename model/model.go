@@ -259,57 +259,32 @@ func NewWithOptions(repos []scanner.Repo, opts Options) Model {
 	}
 	setFlowPhase := opts.SetFlowPhase
 	if setFlowPhase == nil {
-		root := opts.SessionStateRoot
 		setFlowPhase = func(update flowstore.PhaseUpdate) (flowstore.FlowRecord, error) {
-			store, err := flowstore.NewStore(flowstore.StoreOptions{Root: root})
-			if err != nil {
-				return flowstore.FlowRecord{}, err
-			}
-			return store.SetPhase(update)
+			return flowstore.FlowRecord{}, fmt.Errorf("flow daemon client is not configured")
 		}
 	}
 	setFlowAutoMode := opts.SetFlowAutoMode
 	if setFlowAutoMode == nil {
-		root := opts.SessionStateRoot
 		setFlowAutoMode = func(update flowstore.AutoModeUpdate) (flowstore.FlowRecord, error) {
-			store, err := flowstore.NewStore(flowstore.StoreOptions{Root: root})
-			if err != nil {
-				return flowstore.FlowRecord{}, err
-			}
-			return store.SetAutoMode(update)
+			return flowstore.FlowRecord{}, fmt.Errorf("flow daemon client is not configured")
 		}
 	}
 	addFlowPhaseLaunchID := opts.AddFlowPhaseLaunchID
 	if addFlowPhaseLaunchID == nil {
-		root := opts.SessionStateRoot
 		addFlowPhaseLaunchID = func(update flowstore.PhaseLaunchUpdate) (flowstore.FlowRecord, error) {
-			store, err := flowstore.NewStore(flowstore.StoreOptions{Root: root})
-			if err != nil {
-				return flowstore.FlowRecord{}, err
-			}
-			return store.AddPhaseLaunchID(update)
+			return flowstore.FlowRecord{}, fmt.Errorf("flow daemon client is not configured")
 		}
 	}
 	resetFlowPhase := opts.ResetFlowPhase
 	if resetFlowPhase == nil {
-		root := opts.SessionStateRoot
 		resetFlowPhase = func(update flowstore.PhaseResetUpdate) (flowstore.FlowRecord, error) {
-			store, err := flowstore.NewStore(flowstore.StoreOptions{Root: root})
-			if err != nil {
-				return flowstore.FlowRecord{}, err
-			}
-			return store.ResetAwaitingSessionPhase(update)
+			return flowstore.FlowRecord{}, fmt.Errorf("flow daemon client is not configured")
 		}
 	}
 	deleteFlow := opts.DeleteFlow
 	if deleteFlow == nil {
-		root := opts.SessionStateRoot
 		deleteFlow = func(flowID string) error {
-			store, err := flowstore.NewStore(flowstore.StoreOptions{Root: root})
-			if err != nil {
-				return err
-			}
-			return store.Delete(flowID)
+			return fmt.Errorf("flow daemon client is not configured")
 		}
 	}
 	readPlan := opts.ReadPlan
@@ -363,39 +338,14 @@ func NewWithOptions(repos []scanner.Repo, opts Options) Model {
 	}
 	createFlowForRepo := opts.CreateFlow
 	startFlowPlan := opts.StartFlowPlan
-	if createFlowForRepo == nil || startFlowPlan == nil {
-		root := opts.SessionStateRoot
-		createFlow := func(record flowstore.FlowRecord) (flowstore.FlowRecord, error) {
-			store, err := flowstore.NewStore(flowstore.StoreOptions{Root: root})
-			if err != nil {
-				return flowstore.FlowRecord{}, err
-			}
-			return store.Create(record)
+	if createFlowForRepo == nil {
+		createFlowForRepo = func(req FlowStartRequest) (FlowStartResult, error) {
+			return FlowStartResult{}, fmt.Errorf("flow daemon client is not configured")
 		}
-		setFlowStartMetadata := func(update flowstore.StartMetadataUpdate) (flowstore.FlowRecord, error) {
-			store, err := flowstore.NewStore(flowstore.StoreOptions{Root: root})
-			if err != nil {
-				return flowstore.FlowRecord{}, err
-			}
-			return store.SetStartMetadata(update)
-		}
-		starter := NewFlowStarter(FlowStarterOptions{
-			CreateFlow:           createFlow,
-			CreateWorktree:       actions.CreateFlowWorktree,
-			SetStartMetadata:     setFlowStartMetadata,
-			SetPhase:             setFlowPhase,
-			AddPhaseLaunchID:     addFlowPhaseLaunchID,
-			BootstrapHookForRepo: bootstrapHookForRepo,
-			RunBootstrapHook:     runBootstrapHook,
-			ResolveCommit:        actions.ResolveWorktreeCommit,
-			NewLaunchID:          newLaunchID,
-			FlowPromptTemplates:  opts.FlowPromptTemplates,
-		})
-		if createFlowForRepo == nil {
-			createFlowForRepo = starter.PrepareFlow
-		}
-		if startFlowPlan == nil {
-			startFlowPlan = starter.StartPlan
+	}
+	if startFlowPlan == nil {
+		startFlowPlan = func(req FlowStartRequest) (FlowStartResult, error) {
+			return FlowStartResult{}, fmt.Errorf("flow daemon client is not configured")
 		}
 	}
 	finalizeAgentSession := opts.FinalizeAgentSession
