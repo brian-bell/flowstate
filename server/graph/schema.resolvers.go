@@ -129,6 +129,90 @@ func (r *mutationResolver) CreateFlowAndLaunchPlan(ctx context.Context, input mo
 	}, nil
 }
 
+// StartFlow is the resolver for the startFlow field.
+func (r *mutationResolver) StartFlow(ctx context.Context, input model.StartFlowInput) (*model.StartFlowPayload, error) {
+	if r.FlowCreator == nil {
+		return nil, fmt.Errorf("flow creator is not configured")
+	}
+	var command string
+	var reasoningEffort string
+	if input.LaunchPlan {
+		if r.FlowStore == nil {
+			return nil, fmt.Errorf("flow store is not configured")
+		}
+		if r.RuntimeStarter == nil {
+			return nil, fmt.Errorf("runtime job starter is not configured")
+		}
+		var err error
+		command, err = r.launchAgentCommand(input.AgentCommand)
+		if err != nil {
+			return nil, err
+		}
+		reasoningEffort, err = r.launchReasoningEffort(command, input.ReasoningEffort)
+		if err != nil {
+			return nil, err
+		}
+	}
+	baseRef := ""
+	if input.BaseRef != nil {
+		baseRef = *input.BaseRef
+	}
+	record, err := r.FlowCreator.CreateFlow(ctx, CreateFlowInput{
+		RepoPath:     input.RepoPath,
+		Title:        input.Title,
+		Instructions: input.Instructions,
+		BaseRef:      baseRef,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if !input.LaunchPlan {
+		view := r.flowView(record)
+		return &model.StartFlowPayload{Flow: flowToGraphQL(view)}, nil
+	}
+	phase, ok := flowlaunch.PhaseByID(record, "plan")
+	if !ok {
+		return nil, fmt.Errorf("phase %q not found in flow %q", "plan", record.FlowID)
+	}
+	if phase.Status == flowstore.PhaseBlocked {
+		view := r.flowView(record)
+		return &model.StartFlowPayload{Flow: flowToGraphQL(view)}, nil
+	}
+	if !flowlaunch.PhaseCanLaunch(record, phase) {
+		return nil, fmt.Errorf("phase %q is not launchable from status %q", phase.PhaseID, phase.Status)
+	}
+	launch, err := r.startFlowRuntimeJob(ctx, record, phase, command, reasoningEffort)
+	if err != nil {
+		var startErr *flowRuntimeStartError
+		if !errors.As(err, &startErr) {
+			return nil, err
+		}
+		updated, readErr := r.FlowStore.Read(record.FlowID)
+		if readErr != nil {
+			return nil, readErr
+		}
+		view := r.flowView(updated)
+		launchID := launch.Context.LaunchID
+		return &model.StartFlowPayload{
+			Flow:        flowToGraphQL(view),
+			LaunchID:    &launchID,
+			LaunchError: startErr.err.Error(),
+		}, nil
+	}
+	updated, err := r.FlowStore.Read(record.FlowID)
+	if err != nil {
+		return nil, err
+	}
+	view := r.flowView(updated)
+	launchID := launch.Context.LaunchID
+	return &model.StartFlowPayload{
+		Flow:        flowToGraphQL(view),
+		LaunchID:    &launchID,
+		Job:         runtimeJobSnapshotToGraphQL(launch.Snapshot),
+		LaunchError: "",
+	}, nil
+}
+
 // LaunchFlowPhase is the resolver for the launchFlowPhase field.
 func (r *mutationResolver) LaunchFlowPhase(ctx context.Context, input model.LaunchFlowPhaseInput) (*model.LaunchFlowPhasePayload, error) {
 	if r.FlowStore == nil {
@@ -235,23 +319,155 @@ func (r *mutationResolver) SetFlowPhaseStatus(ctx context.Context, input model.S
 	return nil, fmt.Errorf("set flow phase status %q/%q: updated phase not found", input.FlowID, input.PhaseID)
 }
 
+// RestartFlowPhase is the resolver for the restartFlowPhase field.
+func (r *mutationResolver) RestartFlowPhase(ctx context.Context, input model.RestartFlowPhaseInput) (*model.RestartFlowPhasePayload, error) {
+	if r.FlowStore == nil {
+		return nil, fmt.Errorf("flow store is not configured")
+	}
+	update := flowstore.PhaseRestartUpdate{FlowID: input.FlowID, PhaseID: input.PhaseID}
+	if input.Notes != nil {
+		update.Notes = *input.Notes
+	}
+	record, err := r.FlowStore.RestartPhase(update)
+	if err != nil {
+		return nil, fmt.Errorf("restart flow phase %q/%q: %w", input.FlowID, input.PhaseID, err)
+	}
+	flow, phase, err := r.flowAndPhase(record, input.PhaseID)
+	if err != nil {
+		return nil, err
+	}
+	return &model.RestartFlowPhasePayload{Flow: flow, Phase: phase}, nil
+}
+
+// AddFlowChildPhase is the resolver for the addFlowChildPhase field.
+func (r *mutationResolver) AddFlowChildPhase(ctx context.Context, input model.AddFlowChildPhaseInput) (*model.AddFlowChildPhasePayload, error) {
+	if r.FlowStore == nil {
+		return nil, fmt.Errorf("flow store is not configured")
+	}
+	record, err := r.FlowStore.AddChildPhase(flowstore.ChildPhaseUpdate{
+		FlowID:        input.FlowID,
+		ParentPhaseID: input.ParentPhaseID,
+		PhaseID:       input.PhaseID,
+		Title:         input.Title,
+		Order:         input.Order,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("add flow child phase %q/%q: %w", input.FlowID, input.PhaseID, err)
+	}
+	flow, phase, err := r.flowAndPhase(record, input.PhaseID)
+	if err != nil {
+		return nil, err
+	}
+	return &model.AddFlowChildPhasePayload{Flow: flow, Phase: phase}, nil
+}
+
+// SetFlowPlanLink is the resolver for the setFlowPlanLink field.
+func (r *mutationResolver) SetFlowPlanLink(ctx context.Context, input model.SetFlowPlanLinkInput) (*model.SetFlowPlanLinkPayload, error) {
+	if r.FlowStore == nil {
+		return nil, fmt.Errorf("flow store is not configured")
+	}
+	record, err := r.FlowStore.SetPlanLink(flowstore.PlanLinkUpdate{
+		FlowID:   input.FlowID,
+		PlanID:   input.PlanID,
+		PlanPath: input.PlanPath,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("set flow plan link %q/%q: %w", input.FlowID, input.PlanID, err)
+	}
+	return &model.SetFlowPlanLinkPayload{Flow: flowToGraphQL(r.flowView(record))}, nil
+}
+
+// SetFlowPr is the resolver for the setFlowPR field.
+func (r *mutationResolver) SetFlowPr(ctx context.Context, input model.SetFlowPRInput) (*model.SetFlowPRPayload, error) {
+	if r.FlowStore == nil {
+		return nil, fmt.Errorf("flow store is not configured")
+	}
+	update := flowstore.PRUpdate{
+		FlowID:     input.FlowID,
+		Provider:   input.Provider,
+		Number:     input.Number,
+		URL:        input.URL,
+		HeadBranch: input.HeadBranch,
+		BaseBranch: input.BaseBranch,
+	}
+	if input.Status != nil {
+		update.Status = *input.Status
+	}
+	record, err := r.FlowStore.SetPR(update)
+	if err != nil {
+		return nil, fmt.Errorf("set flow PR %q: %w", input.FlowID, err)
+	}
+	return &model.SetFlowPRPayload{Flow: flowToGraphQL(r.flowView(record)), Pr: pullRequestToGraphQL(record.PR)}, nil
+}
+
+// SetFlowMerge is the resolver for the setFlowMerge field.
+func (r *mutationResolver) SetFlowMerge(ctx context.Context, input model.SetFlowMergeInput) (*model.SetFlowMergePayload, error) {
+	if r.FlowStore == nil {
+		return nil, fmt.Errorf("flow store is not configured")
+	}
+	update := flowstore.MergeUpdate{FlowID: input.FlowID, Status: input.Status}
+	if input.Commit != nil {
+		update.Commit = *input.Commit
+	}
+	if input.MergedAt != nil {
+		update.MergedAt = *input.MergedAt
+	}
+	record, err := r.FlowStore.SetMerge(update)
+	if err != nil {
+		return nil, fmt.Errorf("set flow merge %q: %w", input.FlowID, err)
+	}
+	return &model.SetFlowMergePayload{Flow: flowToGraphQL(r.flowView(record)), Merge: mergeToGraphQL(record.Merge)}, nil
+}
+
+// SetFlowAutoMode is the resolver for the setFlowAutoMode field.
+func (r *mutationResolver) SetFlowAutoMode(ctx context.Context, input model.SetFlowAutoModeInput) (*model.SetFlowAutoModePayload, error) {
+	if r.FlowStore == nil {
+		return nil, fmt.Errorf("flow store is not configured")
+	}
+	record, err := r.FlowStore.SetAutoMode(flowstore.AutoModeUpdate{FlowID: input.FlowID, Enabled: input.Enabled})
+	if err != nil {
+		return nil, fmt.Errorf("set flow auto mode %q: %w", input.FlowID, err)
+	}
+	return &model.SetFlowAutoModePayload{Flow: flowToGraphQL(r.flowView(record))}, nil
+}
+
+// DeleteFlow is the resolver for the deleteFlow field.
+func (r *mutationResolver) DeleteFlow(ctx context.Context, id string) (*model.DeleteFlowPayload, error) {
+	if r.FlowStore == nil {
+		return nil, fmt.Errorf("flow store is not configured")
+	}
+	if err := r.FlowStore.Delete(id); err != nil {
+		return nil, fmt.Errorf("delete flow %q: %w", id, err)
+	}
+	return &model.DeleteFlowPayload{DeletedID: id}, nil
+}
+
 // Health is the resolver for the health field.
 func (r *queryResolver) Health(ctx context.Context) (string, error) {
 	return "ok", nil
 }
 
 // Flows is the resolver for the flows field.
-func (r *queryResolver) Flows(ctx context.Context, statuses []model.FlowStatus) ([]*model.Flow, error) {
+func (r *queryResolver) Flows(ctx context.Context, statuses []model.FlowStatus, filter *model.FlowFilterInput) ([]*model.Flow, error) {
 	if r.FlowStore == nil {
 		return nil, fmt.Errorf("flow store is not configured")
 	}
-	records, err := r.FlowStore.List(flowstore.FlowFilter{})
+	storeFilter := flowstore.FlowFilter{}
+	if filter != nil && filter.RepoPath != nil {
+		storeFilter.RepoPath = *filter.RepoPath
+	}
+	records, err := r.FlowStore.List(storeFilter)
 	if err != nil {
 		return nil, err
 	}
 	allowed := make([]string, 0, len(statuses))
 	for _, status := range statuses {
 		allowed = append(allowed, flowStatusInputToStore(status))
+	}
+	if filter != nil {
+		for _, status := range filter.Statuses {
+			allowed = append(allowed, flowStatusInputToStore(status))
+		}
 	}
 	flows := make([]*model.Flow, 0, len(records))
 	for _, record := range records {

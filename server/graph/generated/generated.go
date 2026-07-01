@@ -37,11 +37,20 @@ type DirectiveRoot struct {
 }
 
 type ComplexityRoot struct {
+	AddFlowChildPhasePayload struct {
+		Flow  func(childComplexity int) int
+		Phase func(childComplexity int) int
+	}
+
 	CreateFlowAndLaunchPlanPayload struct {
 		Flow        func(childComplexity int) int
 		Job         func(childComplexity int) int
 		LaunchError func(childComplexity int) int
 		LaunchID    func(childComplexity int) int
+	}
+
+	DeleteFlowPayload struct {
+		DeletedID func(childComplexity int) int
 	}
 
 	Flow struct {
@@ -72,18 +81,30 @@ type ComplexityRoot struct {
 		CreatedAt           func(childComplexity int) int
 		Kind                func(childComplexity int) int
 		LatestLaunchID      func(childComplexity int) int
+		LaunchIds           func(childComplexity int) int
 		Launchable          func(childComplexity int) int
 		Notes               func(childComplexity int) int
 		Order               func(childComplexity int) int
 		Outcome             func(childComplexity int) int
 		ParentPhaseID       func(childComplexity int) int
 		PhaseID             func(childComplexity int) int
+		Sessions            func(childComplexity int) int
 		StaleRunningStatus  func(childComplexity int) int
 		Status              func(childComplexity int) int
 		StatusRaw           func(childComplexity int) int
 		Summary             func(childComplexity int) int
 		Title               func(childComplexity int) int
 		UpdatedAt           func(childComplexity int) int
+	}
+
+	FlowSession struct {
+		EndedAt        func(childComplexity int) int
+		LaunchID       func(childComplexity int) int
+		Provider       func(childComplexity int) int
+		SessionID      func(childComplexity int) int
+		StartedAt      func(childComplexity int) int
+		Status         func(childComplexity int) int
+		TranscriptPath func(childComplexity int) int
 	}
 
 	LaunchFlowPhasePayload struct {
@@ -100,11 +121,19 @@ type ComplexityRoot struct {
 	}
 
 	Mutation struct {
+		AddFlowChildPhase       func(childComplexity int, input model.AddFlowChildPhaseInput) int
 		CancelRuntimeJob        func(childComplexity int, id string) int
 		CreateFlow              func(childComplexity int, input model.CreateFlowInput) int
 		CreateFlowAndLaunchPlan func(childComplexity int, input model.CreateFlowAndLaunchPlanInput) int
+		DeleteFlow              func(childComplexity int, id string) int
 		LaunchFlowPhase         func(childComplexity int, input model.LaunchFlowPhaseInput) int
+		RestartFlowPhase        func(childComplexity int, input model.RestartFlowPhaseInput) int
+		SetFlowAutoMode         func(childComplexity int, input model.SetFlowAutoModeInput) int
+		SetFlowMerge            func(childComplexity int, input model.SetFlowMergeInput) int
 		SetFlowPhaseStatus      func(childComplexity int, input model.SetFlowPhaseStatusInput) int
+		SetFlowPlanLink         func(childComplexity int, input model.SetFlowPlanLinkInput) int
+		SetFlowPr               func(childComplexity int, input model.SetFlowPRInput) int
+		StartFlow               func(childComplexity int, input model.StartFlowInput) int
 	}
 
 	PullRequest struct {
@@ -118,8 +147,13 @@ type ComplexityRoot struct {
 
 	Query struct {
 		Flow   func(childComplexity int, id string) int
-		Flows  func(childComplexity int, statuses []model.FlowStatus) int
+		Flows  func(childComplexity int, statuses []model.FlowStatus, filter *model.FlowFilterInput) int
 		Health func(childComplexity int) int
+	}
+
+	RestartFlowPhasePayload struct {
+		Flow  func(childComplexity int) int
+		Phase func(childComplexity int) int
 	}
 
 	RuntimeJob struct {
@@ -138,9 +172,34 @@ type ComplexityRoot struct {
 		Status           func(childComplexity int) int
 	}
 
+	SetFlowAutoModePayload struct {
+		Flow func(childComplexity int) int
+	}
+
+	SetFlowMergePayload struct {
+		Flow  func(childComplexity int) int
+		Merge func(childComplexity int) int
+	}
+
+	SetFlowPRPayload struct {
+		Flow func(childComplexity int) int
+		Pr   func(childComplexity int) int
+	}
+
 	SetFlowPhaseStatusPayload struct {
 		Flow  func(childComplexity int) int
 		Phase func(childComplexity int) int
+	}
+
+	SetFlowPlanLinkPayload struct {
+		Flow func(childComplexity int) int
+	}
+
+	StartFlowPayload struct {
+		Flow        func(childComplexity int) int
+		Job         func(childComplexity int) int
+		LaunchError func(childComplexity int) int
+		LaunchID    func(childComplexity int) int
 	}
 }
 
@@ -151,13 +210,21 @@ type ComplexityRoot struct {
 type MutationResolver interface {
 	CreateFlow(ctx context.Context, input model.CreateFlowInput) (*model.Flow, error)
 	CreateFlowAndLaunchPlan(ctx context.Context, input model.CreateFlowAndLaunchPlanInput) (*model.CreateFlowAndLaunchPlanPayload, error)
+	StartFlow(ctx context.Context, input model.StartFlowInput) (*model.StartFlowPayload, error)
 	LaunchFlowPhase(ctx context.Context, input model.LaunchFlowPhaseInput) (*model.LaunchFlowPhasePayload, error)
 	CancelRuntimeJob(ctx context.Context, id string) (*model.RuntimeJob, error)
 	SetFlowPhaseStatus(ctx context.Context, input model.SetFlowPhaseStatusInput) (*model.SetFlowPhaseStatusPayload, error)
+	RestartFlowPhase(ctx context.Context, input model.RestartFlowPhaseInput) (*model.RestartFlowPhasePayload, error)
+	AddFlowChildPhase(ctx context.Context, input model.AddFlowChildPhaseInput) (*model.AddFlowChildPhasePayload, error)
+	SetFlowPlanLink(ctx context.Context, input model.SetFlowPlanLinkInput) (*model.SetFlowPlanLinkPayload, error)
+	SetFlowPr(ctx context.Context, input model.SetFlowPRInput) (*model.SetFlowPRPayload, error)
+	SetFlowMerge(ctx context.Context, input model.SetFlowMergeInput) (*model.SetFlowMergePayload, error)
+	SetFlowAutoMode(ctx context.Context, input model.SetFlowAutoModeInput) (*model.SetFlowAutoModePayload, error)
+	DeleteFlow(ctx context.Context, id string) (*model.DeleteFlowPayload, error)
 }
 type QueryResolver interface {
 	Health(ctx context.Context) (string, error)
-	Flows(ctx context.Context, statuses []model.FlowStatus) ([]*model.Flow, error)
+	Flows(ctx context.Context, statuses []model.FlowStatus, filter *model.FlowFilterInput) ([]*model.Flow, error)
 	Flow(ctx context.Context, id string) (*model.Flow, error)
 }
 
@@ -178,6 +245,19 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 	ec := newExecutionContext(nil, e, nil)
 	_ = ec
 	switch typeName + "." + field {
+
+	case "AddFlowChildPhasePayload.flow":
+		if e.ComplexityRoot.AddFlowChildPhasePayload.Flow == nil {
+			break
+		}
+
+		return e.ComplexityRoot.AddFlowChildPhasePayload.Flow(childComplexity), true
+	case "AddFlowChildPhasePayload.phase":
+		if e.ComplexityRoot.AddFlowChildPhasePayload.Phase == nil {
+			break
+		}
+
+		return e.ComplexityRoot.AddFlowChildPhasePayload.Phase(childComplexity), true
 
 	case "CreateFlowAndLaunchPlanPayload.flow":
 		if e.ComplexityRoot.CreateFlowAndLaunchPlanPayload.Flow == nil {
@@ -203,6 +283,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.CreateFlowAndLaunchPlanPayload.LaunchID(childComplexity), true
+
+	case "DeleteFlowPayload.deletedId":
+		if e.ComplexityRoot.DeleteFlowPayload.DeletedID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.DeleteFlowPayload.DeletedID(childComplexity), true
 
 	case "Flow.autoMode":
 		if e.ComplexityRoot.Flow.AutoMode == nil {
@@ -349,6 +436,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.FlowPhase.LatestLaunchID(childComplexity), true
+	case "FlowPhase.launchIds":
+		if e.ComplexityRoot.FlowPhase.LaunchIds == nil {
+			break
+		}
+
+		return e.ComplexityRoot.FlowPhase.LaunchIds(childComplexity), true
 	case "FlowPhase.launchable":
 		if e.ComplexityRoot.FlowPhase.Launchable == nil {
 			break
@@ -385,6 +478,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.FlowPhase.PhaseID(childComplexity), true
+	case "FlowPhase.sessions":
+		if e.ComplexityRoot.FlowPhase.Sessions == nil {
+			break
+		}
+
+		return e.ComplexityRoot.FlowPhase.Sessions(childComplexity), true
 	case "FlowPhase.staleRunningStatus":
 		if e.ComplexityRoot.FlowPhase.StaleRunningStatus == nil {
 			break
@@ -421,6 +520,49 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.FlowPhase.UpdatedAt(childComplexity), true
+
+	case "FlowSession.endedAt":
+		if e.ComplexityRoot.FlowSession.EndedAt == nil {
+			break
+		}
+
+		return e.ComplexityRoot.FlowSession.EndedAt(childComplexity), true
+	case "FlowSession.launchId":
+		if e.ComplexityRoot.FlowSession.LaunchID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.FlowSession.LaunchID(childComplexity), true
+	case "FlowSession.provider":
+		if e.ComplexityRoot.FlowSession.Provider == nil {
+			break
+		}
+
+		return e.ComplexityRoot.FlowSession.Provider(childComplexity), true
+	case "FlowSession.sessionId":
+		if e.ComplexityRoot.FlowSession.SessionID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.FlowSession.SessionID(childComplexity), true
+	case "FlowSession.startedAt":
+		if e.ComplexityRoot.FlowSession.StartedAt == nil {
+			break
+		}
+
+		return e.ComplexityRoot.FlowSession.StartedAt(childComplexity), true
+	case "FlowSession.status":
+		if e.ComplexityRoot.FlowSession.Status == nil {
+			break
+		}
+
+		return e.ComplexityRoot.FlowSession.Status(childComplexity), true
+	case "FlowSession.transcriptPath":
+		if e.ComplexityRoot.FlowSession.TranscriptPath == nil {
+			break
+		}
+
+		return e.ComplexityRoot.FlowSession.TranscriptPath(childComplexity), true
 
 	case "LaunchFlowPhasePayload.flowId":
 		if e.ComplexityRoot.LaunchFlowPhasePayload.FlowID == nil {
@@ -466,6 +608,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Merge.Status(childComplexity), true
 
+	case "Mutation.addFlowChildPhase":
+		if e.ComplexityRoot.Mutation.AddFlowChildPhase == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_addFlowChildPhase_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.AddFlowChildPhase(childComplexity, args["input"].(model.AddFlowChildPhaseInput)), true
 	case "Mutation.cancelRuntimeJob":
 		if e.ComplexityRoot.Mutation.CancelRuntimeJob == nil {
 			break
@@ -499,6 +652,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.CreateFlowAndLaunchPlan(childComplexity, args["input"].(model.CreateFlowAndLaunchPlanInput)), true
+	case "Mutation.deleteFlow":
+		if e.ComplexityRoot.Mutation.DeleteFlow == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_deleteFlow_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.DeleteFlow(childComplexity, args["id"].(string)), true
 	case "Mutation.launchFlowPhase":
 		if e.ComplexityRoot.Mutation.LaunchFlowPhase == nil {
 			break
@@ -510,6 +674,39 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.LaunchFlowPhase(childComplexity, args["input"].(model.LaunchFlowPhaseInput)), true
+	case "Mutation.restartFlowPhase":
+		if e.ComplexityRoot.Mutation.RestartFlowPhase == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_restartFlowPhase_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.RestartFlowPhase(childComplexity, args["input"].(model.RestartFlowPhaseInput)), true
+	case "Mutation.setFlowAutoMode":
+		if e.ComplexityRoot.Mutation.SetFlowAutoMode == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_setFlowAutoMode_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.SetFlowAutoMode(childComplexity, args["input"].(model.SetFlowAutoModeInput)), true
+	case "Mutation.setFlowMerge":
+		if e.ComplexityRoot.Mutation.SetFlowMerge == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_setFlowMerge_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.SetFlowMerge(childComplexity, args["input"].(model.SetFlowMergeInput)), true
 	case "Mutation.setFlowPhaseStatus":
 		if e.ComplexityRoot.Mutation.SetFlowPhaseStatus == nil {
 			break
@@ -521,6 +718,39 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.SetFlowPhaseStatus(childComplexity, args["input"].(model.SetFlowPhaseStatusInput)), true
+	case "Mutation.setFlowPlanLink":
+		if e.ComplexityRoot.Mutation.SetFlowPlanLink == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_setFlowPlanLink_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.SetFlowPlanLink(childComplexity, args["input"].(model.SetFlowPlanLinkInput)), true
+	case "Mutation.setFlowPR":
+		if e.ComplexityRoot.Mutation.SetFlowPr == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_setFlowPR_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.SetFlowPr(childComplexity, args["input"].(model.SetFlowPRInput)), true
+	case "Mutation.startFlow":
+		if e.ComplexityRoot.Mutation.StartFlow == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_startFlow_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.StartFlow(childComplexity, args["input"].(model.StartFlowInput)), true
 
 	case "PullRequest.baseBranch":
 		if e.ComplexityRoot.PullRequest.BaseBranch == nil {
@@ -580,13 +810,26 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 			return 0, false
 		}
 
-		return e.ComplexityRoot.Query.Flows(childComplexity, args["statuses"].([]model.FlowStatus)), true
+		return e.ComplexityRoot.Query.Flows(childComplexity, args["statuses"].([]model.FlowStatus), args["filter"].(*model.FlowFilterInput)), true
 	case "Query.health":
 		if e.ComplexityRoot.Query.Health == nil {
 			break
 		}
 
 		return e.ComplexityRoot.Query.Health(childComplexity), true
+
+	case "RestartFlowPhasePayload.flow":
+		if e.ComplexityRoot.RestartFlowPhasePayload.Flow == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RestartFlowPhasePayload.Flow(childComplexity), true
+	case "RestartFlowPhasePayload.phase":
+		if e.ComplexityRoot.RestartFlowPhasePayload.Phase == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RestartFlowPhasePayload.Phase(childComplexity), true
 
 	case "RuntimeJob.createdAt":
 		if e.ComplexityRoot.RuntimeJob.CreatedAt == nil {
@@ -667,6 +910,39 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.RuntimeJob.Status(childComplexity), true
 
+	case "SetFlowAutoModePayload.flow":
+		if e.ComplexityRoot.SetFlowAutoModePayload.Flow == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SetFlowAutoModePayload.Flow(childComplexity), true
+
+	case "SetFlowMergePayload.flow":
+		if e.ComplexityRoot.SetFlowMergePayload.Flow == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SetFlowMergePayload.Flow(childComplexity), true
+	case "SetFlowMergePayload.merge":
+		if e.ComplexityRoot.SetFlowMergePayload.Merge == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SetFlowMergePayload.Merge(childComplexity), true
+
+	case "SetFlowPRPayload.flow":
+		if e.ComplexityRoot.SetFlowPRPayload.Flow == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SetFlowPRPayload.Flow(childComplexity), true
+	case "SetFlowPRPayload.pr":
+		if e.ComplexityRoot.SetFlowPRPayload.Pr == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SetFlowPRPayload.Pr(childComplexity), true
+
 	case "SetFlowPhaseStatusPayload.flow":
 		if e.ComplexityRoot.SetFlowPhaseStatusPayload.Flow == nil {
 			break
@@ -680,6 +956,38 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.SetFlowPhaseStatusPayload.Phase(childComplexity), true
 
+	case "SetFlowPlanLinkPayload.flow":
+		if e.ComplexityRoot.SetFlowPlanLinkPayload.Flow == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SetFlowPlanLinkPayload.Flow(childComplexity), true
+
+	case "StartFlowPayload.flow":
+		if e.ComplexityRoot.StartFlowPayload.Flow == nil {
+			break
+		}
+
+		return e.ComplexityRoot.StartFlowPayload.Flow(childComplexity), true
+	case "StartFlowPayload.job":
+		if e.ComplexityRoot.StartFlowPayload.Job == nil {
+			break
+		}
+
+		return e.ComplexityRoot.StartFlowPayload.Job(childComplexity), true
+	case "StartFlowPayload.launchError":
+		if e.ComplexityRoot.StartFlowPayload.LaunchError == nil {
+			break
+		}
+
+		return e.ComplexityRoot.StartFlowPayload.LaunchError(childComplexity), true
+	case "StartFlowPayload.launchId":
+		if e.ComplexityRoot.StartFlowPayload.LaunchID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.StartFlowPayload.LaunchID(childComplexity), true
+
 	}
 	return 0, false
 }
@@ -688,10 +996,18 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 	opCtx := graphql.GetOperationContext(ctx)
 	ec := newExecutionContext(opCtx, e, make(chan graphql.DeferredResult))
 	inputUnmarshalMap := graphql.BuildUnmarshalerMap(
+		ec.unmarshalInputAddFlowChildPhaseInput,
 		ec.unmarshalInputCreateFlowAndLaunchPlanInput,
 		ec.unmarshalInputCreateFlowInput,
+		ec.unmarshalInputFlowFilterInput,
 		ec.unmarshalInputLaunchFlowPhaseInput,
+		ec.unmarshalInputRestartFlowPhaseInput,
+		ec.unmarshalInputSetFlowAutoModeInput,
+		ec.unmarshalInputSetFlowMergeInput,
+		ec.unmarshalInputSetFlowPRInput,
 		ec.unmarshalInputSetFlowPhaseStatusInput,
+		ec.unmarshalInputSetFlowPlanLinkInput,
+		ec.unmarshalInputStartFlowInput,
 	)
 	first := true
 
@@ -776,16 +1092,29 @@ scalar Time
 
 type Query {
   health: String!
-  flows(statuses: [FlowStatus!]): [Flow!]!
+  flows(statuses: [FlowStatus!], filter: FlowFilterInput): [Flow!]!
   flow(id: ID!): Flow
+}
+
+input FlowFilterInput {
+  repoPath: String
+  statuses: [FlowStatus!]
 }
 
 type Mutation {
   createFlow(input: CreateFlowInput!): Flow!
   createFlowAndLaunchPlan(input: CreateFlowAndLaunchPlanInput!): CreateFlowAndLaunchPlanPayload!
+  startFlow(input: StartFlowInput!): StartFlowPayload!
   launchFlowPhase(input: LaunchFlowPhaseInput!): LaunchFlowPhasePayload!
   cancelRuntimeJob(id: ID!): RuntimeJob!
   setFlowPhaseStatus(input: SetFlowPhaseStatusInput!): SetFlowPhaseStatusPayload!
+  restartFlowPhase(input: RestartFlowPhaseInput!): RestartFlowPhasePayload!
+  addFlowChildPhase(input: AddFlowChildPhaseInput!): AddFlowChildPhasePayload!
+  setFlowPlanLink(input: SetFlowPlanLinkInput!): SetFlowPlanLinkPayload!
+  setFlowPR(input: SetFlowPRInput!): SetFlowPRPayload!
+  setFlowMerge(input: SetFlowMergeInput!): SetFlowMergePayload!
+  setFlowAutoMode(input: SetFlowAutoModeInput!): SetFlowAutoModePayload!
+  deleteFlow(id: ID!): DeleteFlowPayload!
 }
 
 input CreateFlowInput {
@@ -805,6 +1134,23 @@ input CreateFlowAndLaunchPlanInput {
 }
 
 type CreateFlowAndLaunchPlanPayload {
+  flow: Flow!
+  launchId: ID
+  job: RuntimeJob
+  launchError: String!
+}
+
+input StartFlowInput {
+  repoPath: String!
+  title: String!
+  instructions: String!
+  baseRef: String
+  launchPlan: Boolean!
+  agentCommand: String
+  reasoningEffort: String
+}
+
+type StartFlowPayload {
   flow: Flow!
   launchId: ID
   job: RuntimeJob
@@ -837,6 +1183,80 @@ input SetFlowPhaseStatusInput {
 type SetFlowPhaseStatusPayload {
   flow: Flow!
   phase: FlowPhase!
+}
+
+input RestartFlowPhaseInput {
+  flowId: ID!
+  phaseId: ID!
+  notes: String
+}
+
+type RestartFlowPhasePayload {
+  flow: Flow!
+  phase: FlowPhase!
+}
+
+input AddFlowChildPhaseInput {
+  flowId: ID!
+  parentPhaseId: ID!
+  phaseId: ID!
+  title: String!
+  order: Int!
+}
+
+type AddFlowChildPhasePayload {
+  flow: Flow!
+  phase: FlowPhase!
+}
+
+input SetFlowPlanLinkInput {
+  flowId: ID!
+  planId: ID!
+  planPath: String!
+}
+
+type SetFlowPlanLinkPayload {
+  flow: Flow!
+}
+
+input SetFlowPRInput {
+  flowId: ID!
+  provider: String!
+  number: Int!
+  url: String!
+  headBranch: String!
+  baseBranch: String!
+  status: String
+}
+
+type SetFlowPRPayload {
+  flow: Flow!
+  pr: PullRequest!
+}
+
+input SetFlowMergeInput {
+  flowId: ID!
+  status: String!
+  commit: String
+  mergedAt: Time
+}
+
+type SetFlowMergePayload {
+  flow: Flow!
+  merge: Merge!
+}
+
+input SetFlowAutoModeInput {
+  flowId: ID!
+  enabled: Boolean!
+}
+
+type SetFlowAutoModePayload {
+  flow: Flow!
+}
+
+type DeleteFlowPayload {
+  deletedId: ID!
 }
 
 enum FlowStatus {
@@ -906,6 +1326,8 @@ type FlowPhase {
   outcome: String!
   notes: String!
   summary: String!
+  launchIds: [String!]!
+  sessions: [FlowSession!]!
   latestLaunchId: String
   createdAt: Time!
   updatedAt: Time!
@@ -913,6 +1335,16 @@ type FlowPhase {
   launchable: Boolean!
   staleRunningStatus: FlowPhaseStaleRunningStatus
   activeRuntimeJob: RuntimeJob
+}
+
+type FlowSession {
+  provider: String!
+  sessionId: String!
+  launchId: String!
+  status: String!
+  startedAt: Time
+  endedAt: Time
+  transcriptPath: String!
 }
 
 type PullRequest {
@@ -953,6 +1385,16 @@ var parsedSchema = gqlparser.MustLoadSchema(sources...)
 // Each function is generated once per unique object type, deduplicating the
 // switch statements that were previously inlined in every fieldContext_* function.
 
+func (ec *executionContext) childFields_AddFlowChildPhasePayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "flow":
+		return ec.fieldContext_AddFlowChildPhasePayload_flow(ctx, field)
+	case "phase":
+		return ec.fieldContext_AddFlowChildPhasePayload_phase(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type AddFlowChildPhasePayload", field.Name)
+}
+
 func (ec *executionContext) childFields_CreateFlowAndLaunchPlanPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "flow":
@@ -965,6 +1407,14 @@ func (ec *executionContext) childFields_CreateFlowAndLaunchPlanPayload(ctx conte
 		return ec.fieldContext_CreateFlowAndLaunchPlanPayload_launchError(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type CreateFlowAndLaunchPlanPayload", field.Name)
+}
+
+func (ec *executionContext) childFields_DeleteFlowPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "deletedId":
+		return ec.fieldContext_DeleteFlowPayload_deletedId(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type DeleteFlowPayload", field.Name)
 }
 
 func (ec *executionContext) childFields_Flow(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -1033,6 +1483,10 @@ func (ec *executionContext) childFields_FlowPhase(ctx context.Context, field gra
 		return ec.fieldContext_FlowPhase_notes(ctx, field)
 	case "summary":
 		return ec.fieldContext_FlowPhase_summary(ctx, field)
+	case "launchIds":
+		return ec.fieldContext_FlowPhase_launchIds(ctx, field)
+	case "sessions":
+		return ec.fieldContext_FlowPhase_sessions(ctx, field)
 	case "latestLaunchId":
 		return ec.fieldContext_FlowPhase_latestLaunchId(ctx, field)
 	case "createdAt":
@@ -1049,6 +1503,26 @@ func (ec *executionContext) childFields_FlowPhase(ctx context.Context, field gra
 		return ec.fieldContext_FlowPhase_activeRuntimeJob(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type FlowPhase", field.Name)
+}
+
+func (ec *executionContext) childFields_FlowSession(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "provider":
+		return ec.fieldContext_FlowSession_provider(ctx, field)
+	case "sessionId":
+		return ec.fieldContext_FlowSession_sessionId(ctx, field)
+	case "launchId":
+		return ec.fieldContext_FlowSession_launchId(ctx, field)
+	case "status":
+		return ec.fieldContext_FlowSession_status(ctx, field)
+	case "startedAt":
+		return ec.fieldContext_FlowSession_startedAt(ctx, field)
+	case "endedAt":
+		return ec.fieldContext_FlowSession_endedAt(ctx, field)
+	case "transcriptPath":
+		return ec.fieldContext_FlowSession_transcriptPath(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type FlowSession", field.Name)
 }
 
 func (ec *executionContext) childFields_LaunchFlowPhasePayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -1095,6 +1569,16 @@ func (ec *executionContext) childFields_PullRequest(ctx context.Context, field g
 	return nil, fmt.Errorf("no field named %q was found under type PullRequest", field.Name)
 }
 
+func (ec *executionContext) childFields_RestartFlowPhasePayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "flow":
+		return ec.fieldContext_RestartFlowPhasePayload_flow(ctx, field)
+	case "phase":
+		return ec.fieldContext_RestartFlowPhasePayload_phase(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type RestartFlowPhasePayload", field.Name)
+}
+
 func (ec *executionContext) childFields_RuntimeJob(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "id":
@@ -1127,6 +1611,34 @@ func (ec *executionContext) childFields_RuntimeJob(ctx context.Context, field gr
 	return nil, fmt.Errorf("no field named %q was found under type RuntimeJob", field.Name)
 }
 
+func (ec *executionContext) childFields_SetFlowAutoModePayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "flow":
+		return ec.fieldContext_SetFlowAutoModePayload_flow(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type SetFlowAutoModePayload", field.Name)
+}
+
+func (ec *executionContext) childFields_SetFlowMergePayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "flow":
+		return ec.fieldContext_SetFlowMergePayload_flow(ctx, field)
+	case "merge":
+		return ec.fieldContext_SetFlowMergePayload_merge(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type SetFlowMergePayload", field.Name)
+}
+
+func (ec *executionContext) childFields_SetFlowPRPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "flow":
+		return ec.fieldContext_SetFlowPRPayload_flow(ctx, field)
+	case "pr":
+		return ec.fieldContext_SetFlowPRPayload_pr(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type SetFlowPRPayload", field.Name)
+}
+
 func (ec *executionContext) childFields_SetFlowPhaseStatusPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "flow":
@@ -1135,6 +1647,28 @@ func (ec *executionContext) childFields_SetFlowPhaseStatusPayload(ctx context.Co
 		return ec.fieldContext_SetFlowPhaseStatusPayload_phase(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type SetFlowPhaseStatusPayload", field.Name)
+}
+
+func (ec *executionContext) childFields_SetFlowPlanLinkPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "flow":
+		return ec.fieldContext_SetFlowPlanLinkPayload_flow(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type SetFlowPlanLinkPayload", field.Name)
+}
+
+func (ec *executionContext) childFields_StartFlowPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "flow":
+		return ec.fieldContext_StartFlowPayload_flow(ctx, field)
+	case "launchId":
+		return ec.fieldContext_StartFlowPayload_launchId(ctx, field)
+	case "job":
+		return ec.fieldContext_StartFlowPayload_job(ctx, field)
+	case "launchError":
+		return ec.fieldContext_StartFlowPayload_launchError(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type StartFlowPayload", field.Name)
 }
 
 func (ec *executionContext) childFields___Directive(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -1253,6 +1787,20 @@ func (ec *executionContext) childFields___Type(ctx context.Context, field graphq
 
 // region    ***************************** args.gotpl *****************************
 
+func (ec *executionContext) field_Mutation_addFlowChildPhase_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input",
+		func(ctx context.Context, v any) (model.AddFlowChildPhaseInput, error) {
+			return ec.unmarshalNAddFlowChildPhaseInput2githubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐAddFlowChildPhaseInput(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["input"] = arg0
+	return args, nil
+}
+
 func (ec *executionContext) field_Mutation_cancelRuntimeJob_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
@@ -1295,6 +1843,20 @@ func (ec *executionContext) field_Mutation_createFlow_args(ctx context.Context, 
 	return args, nil
 }
 
+func (ec *executionContext) field_Mutation_deleteFlow_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "id",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNID2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["id"] = arg0
+	return args, nil
+}
+
 func (ec *executionContext) field_Mutation_launchFlowPhase_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
@@ -1309,12 +1871,96 @@ func (ec *executionContext) field_Mutation_launchFlowPhase_args(ctx context.Cont
 	return args, nil
 }
 
+func (ec *executionContext) field_Mutation_restartFlowPhase_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input",
+		func(ctx context.Context, v any) (model.RestartFlowPhaseInput, error) {
+			return ec.unmarshalNRestartFlowPhaseInput2githubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐRestartFlowPhaseInput(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["input"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Mutation_setFlowAutoMode_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input",
+		func(ctx context.Context, v any) (model.SetFlowAutoModeInput, error) {
+			return ec.unmarshalNSetFlowAutoModeInput2githubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐSetFlowAutoModeInput(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["input"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Mutation_setFlowMerge_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input",
+		func(ctx context.Context, v any) (model.SetFlowMergeInput, error) {
+			return ec.unmarshalNSetFlowMergeInput2githubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐSetFlowMergeInput(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["input"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Mutation_setFlowPR_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input",
+		func(ctx context.Context, v any) (model.SetFlowPRInput, error) {
+			return ec.unmarshalNSetFlowPRInput2githubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐSetFlowPRInput(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["input"] = arg0
+	return args, nil
+}
+
 func (ec *executionContext) field_Mutation_setFlowPhaseStatus_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
 	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input",
 		func(ctx context.Context, v any) (model.SetFlowPhaseStatusInput, error) {
 			return ec.unmarshalNSetFlowPhaseStatusInput2githubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐSetFlowPhaseStatusInput(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["input"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Mutation_setFlowPlanLink_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input",
+		func(ctx context.Context, v any) (model.SetFlowPlanLinkInput, error) {
+			return ec.unmarshalNSetFlowPlanLinkInput2githubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐSetFlowPlanLinkInput(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["input"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Mutation_startFlow_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input",
+		func(ctx context.Context, v any) (model.StartFlowInput, error) {
+			return ec.unmarshalNStartFlowInput2githubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐStartFlowInput(ctx, v)
 		})
 	if err != nil {
 		return nil, err
@@ -1362,6 +2008,14 @@ func (ec *executionContext) field_Query_flows_args(ctx context.Context, rawArgs 
 		return nil, err
 	}
 	args["statuses"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "filter",
+		func(ctx context.Context, v any) (*model.FlowFilterInput, error) {
+			return ec.unmarshalOFlowFilterInput2ᚖgithubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐFlowFilterInput(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["filter"] = arg1
 	return args, nil
 }
 
@@ -1424,6 +2078,70 @@ func (ec *executionContext) field___Type_fields_args(ctx context.Context, rawArg
 // endregion ***************************** args.gotpl *****************************
 
 // region    **************************** field.gotpl *****************************
+
+func (ec *executionContext) _AddFlowChildPhasePayload_flow(ctx context.Context, field graphql.CollectedField, obj *model.AddFlowChildPhasePayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_AddFlowChildPhasePayload_flow(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Flow, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.Flow) graphql.Marshaler {
+			return ec.marshalNFlow2ᚖgithubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐFlow(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_AddFlowChildPhasePayload_flow(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "AddFlowChildPhasePayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_Flow(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _AddFlowChildPhasePayload_phase(ctx context.Context, field graphql.CollectedField, obj *model.AddFlowChildPhasePayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_AddFlowChildPhasePayload_phase(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Phase, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.FlowPhase) graphql.Marshaler {
+			return ec.marshalNFlowPhase2ᚖgithubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐFlowPhase(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_AddFlowChildPhasePayload_phase(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "AddFlowChildPhasePayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_FlowPhase(ctx, field)
+		},
+	}
+	return fc, nil
+}
 
 func (ec *executionContext) _CreateFlowAndLaunchPlanPayload_flow(ctx context.Context, field graphql.CollectedField, obj *model.CreateFlowAndLaunchPlanPayload) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
@@ -1533,6 +2251,29 @@ func (ec *executionContext) _CreateFlowAndLaunchPlanPayload_launchError(ctx cont
 }
 func (ec *executionContext) fieldContext_CreateFlowAndLaunchPlanPayload_launchError(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("CreateFlowAndLaunchPlanPayload", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _DeleteFlowPayload_deletedId(ctx context.Context, field graphql.CollectedField, obj *model.DeleteFlowPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_DeleteFlowPayload_deletedId(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.DeletedID, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNID2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_DeleteFlowPayload_deletedId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("DeleteFlowPayload", field, false, false, errors.New("field of type ID does not have child fields"))
 }
 
 func (ec *executionContext) _Flow_id(ctx context.Context, field graphql.CollectedField, obj *model.Flow) (ret graphql.Marshaler) {
@@ -2238,6 +2979,61 @@ func (ec *executionContext) fieldContext_FlowPhase_summary(_ context.Context, fi
 	return graphql.NewScalarFieldContext("FlowPhase", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
+func (ec *executionContext) _FlowPhase_launchIds(ctx context.Context, field graphql.CollectedField, obj *model.FlowPhase) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_FlowPhase_launchIds(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.LaunchIds, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []string) graphql.Marshaler {
+			return ec.marshalNString2ᚕstringᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_FlowPhase_launchIds(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("FlowPhase", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _FlowPhase_sessions(ctx context.Context, field graphql.CollectedField, obj *model.FlowPhase) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_FlowPhase_sessions(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Sessions, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []*model.FlowSession) graphql.Marshaler {
+			return ec.marshalNFlowSession2ᚕᚖgithubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐFlowSessionᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_FlowPhase_sessions(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "FlowPhase",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_FlowSession(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _FlowPhase_latestLaunchId(ctx context.Context, field graphql.CollectedField, obj *model.FlowPhase) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -2406,6 +3202,167 @@ func (ec *executionContext) fieldContext_FlowPhase_activeRuntimeJob(_ context.Co
 		},
 	}
 	return fc, nil
+}
+
+func (ec *executionContext) _FlowSession_provider(ctx context.Context, field graphql.CollectedField, obj *model.FlowSession) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_FlowSession_provider(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Provider, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_FlowSession_provider(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("FlowSession", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _FlowSession_sessionId(ctx context.Context, field graphql.CollectedField, obj *model.FlowSession) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_FlowSession_sessionId(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.SessionID, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_FlowSession_sessionId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("FlowSession", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _FlowSession_launchId(ctx context.Context, field graphql.CollectedField, obj *model.FlowSession) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_FlowSession_launchId(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.LaunchID, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_FlowSession_launchId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("FlowSession", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _FlowSession_status(ctx context.Context, field graphql.CollectedField, obj *model.FlowSession) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_FlowSession_status(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Status, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_FlowSession_status(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("FlowSession", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _FlowSession_startedAt(ctx context.Context, field graphql.CollectedField, obj *model.FlowSession) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_FlowSession_startedAt(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.StartedAt, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *time.Time) graphql.Marshaler {
+			return ec.marshalOTime2ᚖtimeᚐTime(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_FlowSession_startedAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("FlowSession", field, false, false, errors.New("field of type Time does not have child fields"))
+}
+
+func (ec *executionContext) _FlowSession_endedAt(ctx context.Context, field graphql.CollectedField, obj *model.FlowSession) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_FlowSession_endedAt(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.EndedAt, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *time.Time) graphql.Marshaler {
+			return ec.marshalOTime2ᚖtimeᚐTime(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_FlowSession_endedAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("FlowSession", field, false, false, errors.New("field of type Time does not have child fields"))
+}
+
+func (ec *executionContext) _FlowSession_transcriptPath(ctx context.Context, field graphql.CollectedField, obj *model.FlowSession) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_FlowSession_transcriptPath(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.TranscriptPath, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_FlowSession_transcriptPath(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("FlowSession", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
 func (ec *executionContext) _LaunchFlowPhasePayload_flowId(ctx context.Context, field graphql.CollectedField, obj *model.LaunchFlowPhasePayload) (ret graphql.Marshaler) {
@@ -2666,6 +3623,50 @@ func (ec *executionContext) fieldContext_Mutation_createFlowAndLaunchPlan(ctx co
 	return fc, nil
 }
 
+func (ec *executionContext) _Mutation_startFlow(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Mutation_startFlow(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().StartFlow(ctx, fc.Args["input"].(model.StartFlowInput))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.StartFlowPayload) graphql.Marshaler {
+			return ec.marshalNStartFlowPayload2ᚖgithubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐStartFlowPayload(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Mutation_startFlow(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_StartFlowPayload(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_startFlow_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Mutation_launchFlowPhase(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -2792,6 +3793,314 @@ func (ec *executionContext) fieldContext_Mutation_setFlowPhaseStatus(ctx context
 	}()
 	ctx = graphql.WithFieldContext(ctx, fc)
 	if fc.Args, err = ec.field_Mutation_setFlowPhaseStatus_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_restartFlowPhase(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Mutation_restartFlowPhase(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().RestartFlowPhase(ctx, fc.Args["input"].(model.RestartFlowPhaseInput))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.RestartFlowPhasePayload) graphql.Marshaler {
+			return ec.marshalNRestartFlowPhasePayload2ᚖgithubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐRestartFlowPhasePayload(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Mutation_restartFlowPhase(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_RestartFlowPhasePayload(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_restartFlowPhase_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_addFlowChildPhase(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Mutation_addFlowChildPhase(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().AddFlowChildPhase(ctx, fc.Args["input"].(model.AddFlowChildPhaseInput))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.AddFlowChildPhasePayload) graphql.Marshaler {
+			return ec.marshalNAddFlowChildPhasePayload2ᚖgithubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐAddFlowChildPhasePayload(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Mutation_addFlowChildPhase(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_AddFlowChildPhasePayload(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_addFlowChildPhase_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_setFlowPlanLink(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Mutation_setFlowPlanLink(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().SetFlowPlanLink(ctx, fc.Args["input"].(model.SetFlowPlanLinkInput))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.SetFlowPlanLinkPayload) graphql.Marshaler {
+			return ec.marshalNSetFlowPlanLinkPayload2ᚖgithubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐSetFlowPlanLinkPayload(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Mutation_setFlowPlanLink(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_SetFlowPlanLinkPayload(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_setFlowPlanLink_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_setFlowPR(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Mutation_setFlowPR(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().SetFlowPr(ctx, fc.Args["input"].(model.SetFlowPRInput))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.SetFlowPRPayload) graphql.Marshaler {
+			return ec.marshalNSetFlowPRPayload2ᚖgithubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐSetFlowPRPayload(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Mutation_setFlowPR(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_SetFlowPRPayload(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_setFlowPR_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_setFlowMerge(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Mutation_setFlowMerge(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().SetFlowMerge(ctx, fc.Args["input"].(model.SetFlowMergeInput))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.SetFlowMergePayload) graphql.Marshaler {
+			return ec.marshalNSetFlowMergePayload2ᚖgithubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐSetFlowMergePayload(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Mutation_setFlowMerge(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_SetFlowMergePayload(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_setFlowMerge_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_setFlowAutoMode(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Mutation_setFlowAutoMode(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().SetFlowAutoMode(ctx, fc.Args["input"].(model.SetFlowAutoModeInput))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.SetFlowAutoModePayload) graphql.Marshaler {
+			return ec.marshalNSetFlowAutoModePayload2ᚖgithubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐSetFlowAutoModePayload(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Mutation_setFlowAutoMode(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_SetFlowAutoModePayload(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_setFlowAutoMode_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_deleteFlow(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Mutation_deleteFlow(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().DeleteFlow(ctx, fc.Args["id"].(string))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.DeleteFlowPayload) graphql.Marshaler {
+			return ec.marshalNDeleteFlowPayload2ᚖgithubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐDeleteFlowPayload(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Mutation_deleteFlow(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_DeleteFlowPayload(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_deleteFlow_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
 		ec.Error(ctx, err)
 		return fc, err
 	}
@@ -2969,7 +4278,7 @@ func (ec *executionContext) _Query_flows(ctx context.Context, field graphql.Coll
 		},
 		func(ctx context.Context) (any, error) {
 			fc := graphql.GetFieldContext(ctx)
-			return ec.Resolvers.Query().Flows(ctx, fc.Args["statuses"].([]model.FlowStatus))
+			return ec.Resolvers.Query().Flows(ctx, fc.Args["statuses"].([]model.FlowStatus), fc.Args["filter"].(*model.FlowFilterInput))
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*model.Flow) graphql.Marshaler {
@@ -3118,6 +4427,70 @@ func (ec *executionContext) fieldContext_Query___schema(_ context.Context, field
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return ec.childFields___Schema(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RestartFlowPhasePayload_flow(ctx context.Context, field graphql.CollectedField, obj *model.RestartFlowPhasePayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_RestartFlowPhasePayload_flow(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Flow, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.Flow) graphql.Marshaler {
+			return ec.marshalNFlow2ᚖgithubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐFlow(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_RestartFlowPhasePayload_flow(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RestartFlowPhasePayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_Flow(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RestartFlowPhasePayload_phase(ctx context.Context, field graphql.CollectedField, obj *model.RestartFlowPhasePayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_RestartFlowPhasePayload_phase(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Phase, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.FlowPhase) graphql.Marshaler {
+			return ec.marshalNFlowPhase2ᚖgithubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐFlowPhase(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_RestartFlowPhasePayload_phase(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RestartFlowPhasePayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_FlowPhase(ctx, field)
 		},
 	}
 	return fc, nil
@@ -3422,6 +4795,166 @@ func (ec *executionContext) fieldContext_RuntimeJob_logTruncated(_ context.Conte
 	return graphql.NewScalarFieldContext("RuntimeJob", field, false, false, errors.New("field of type Boolean does not have child fields"))
 }
 
+func (ec *executionContext) _SetFlowAutoModePayload_flow(ctx context.Context, field graphql.CollectedField, obj *model.SetFlowAutoModePayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_SetFlowAutoModePayload_flow(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Flow, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.Flow) graphql.Marshaler {
+			return ec.marshalNFlow2ᚖgithubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐFlow(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_SetFlowAutoModePayload_flow(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "SetFlowAutoModePayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_Flow(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _SetFlowMergePayload_flow(ctx context.Context, field graphql.CollectedField, obj *model.SetFlowMergePayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_SetFlowMergePayload_flow(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Flow, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.Flow) graphql.Marshaler {
+			return ec.marshalNFlow2ᚖgithubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐFlow(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_SetFlowMergePayload_flow(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "SetFlowMergePayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_Flow(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _SetFlowMergePayload_merge(ctx context.Context, field graphql.CollectedField, obj *model.SetFlowMergePayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_SetFlowMergePayload_merge(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Merge, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.Merge) graphql.Marshaler {
+			return ec.marshalNMerge2ᚖgithubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐMerge(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_SetFlowMergePayload_merge(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "SetFlowMergePayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_Merge(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _SetFlowPRPayload_flow(ctx context.Context, field graphql.CollectedField, obj *model.SetFlowPRPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_SetFlowPRPayload_flow(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Flow, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.Flow) graphql.Marshaler {
+			return ec.marshalNFlow2ᚖgithubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐFlow(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_SetFlowPRPayload_flow(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "SetFlowPRPayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_Flow(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _SetFlowPRPayload_pr(ctx context.Context, field graphql.CollectedField, obj *model.SetFlowPRPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_SetFlowPRPayload_pr(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Pr, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.PullRequest) graphql.Marshaler {
+			return ec.marshalNPullRequest2ᚖgithubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐPullRequest(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_SetFlowPRPayload_pr(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "SetFlowPRPayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_PullRequest(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _SetFlowPhaseStatusPayload_flow(ctx context.Context, field graphql.CollectedField, obj *model.SetFlowPhaseStatusPayload) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -3484,6 +5017,148 @@ func (ec *executionContext) fieldContext_SetFlowPhaseStatusPayload_phase(_ conte
 		},
 	}
 	return fc, nil
+}
+
+func (ec *executionContext) _SetFlowPlanLinkPayload_flow(ctx context.Context, field graphql.CollectedField, obj *model.SetFlowPlanLinkPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_SetFlowPlanLinkPayload_flow(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Flow, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.Flow) graphql.Marshaler {
+			return ec.marshalNFlow2ᚖgithubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐFlow(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_SetFlowPlanLinkPayload_flow(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "SetFlowPlanLinkPayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_Flow(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StartFlowPayload_flow(ctx context.Context, field graphql.CollectedField, obj *model.StartFlowPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_StartFlowPayload_flow(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Flow, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.Flow) graphql.Marshaler {
+			return ec.marshalNFlow2ᚖgithubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐFlow(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_StartFlowPayload_flow(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StartFlowPayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_Flow(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StartFlowPayload_launchId(ctx context.Context, field graphql.CollectedField, obj *model.StartFlowPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_StartFlowPayload_launchId(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.LaunchID, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOID2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_StartFlowPayload_launchId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("StartFlowPayload", field, false, false, errors.New("field of type ID does not have child fields"))
+}
+
+func (ec *executionContext) _StartFlowPayload_job(ctx context.Context, field graphql.CollectedField, obj *model.StartFlowPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_StartFlowPayload_job(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Job, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.RuntimeJob) graphql.Marshaler {
+			return ec.marshalORuntimeJob2ᚖgithubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐRuntimeJob(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_StartFlowPayload_job(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StartFlowPayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_RuntimeJob(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StartFlowPayload_launchError(ctx context.Context, field graphql.CollectedField, obj *model.StartFlowPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_StartFlowPayload_launchError(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.LaunchError, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_StartFlowPayload_launchError(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("StartFlowPayload", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
 func (ec *executionContext) ___Directive_name(ctx context.Context, field graphql.CollectedField, obj *introspection.Directive) (ret graphql.Marshaler) {
@@ -4545,6 +6220,64 @@ func (ec *executionContext) fieldContext___Type_isOneOf(_ context.Context, field
 
 // region    **************************** input.gotpl *****************************
 
+func (ec *executionContext) unmarshalInputAddFlowChildPhaseInput(ctx context.Context, obj any) (model.AddFlowChildPhaseInput, error) {
+	var it model.AddFlowChildPhaseInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"flowId", "parentPhaseId", "phaseId", "title", "order"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "flowId":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("flowId"))
+			data, err := ec.unmarshalNID2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.FlowID = data
+		case "parentPhaseId":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("parentPhaseId"))
+			data, err := ec.unmarshalNID2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ParentPhaseID = data
+		case "phaseId":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("phaseId"))
+			data, err := ec.unmarshalNID2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.PhaseID = data
+		case "title":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("title"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Title = data
+		case "order":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("order"))
+			data, err := ec.unmarshalNInt2int(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Order = data
+		}
+	}
+	return it, nil
+}
+
 func (ec *executionContext) unmarshalInputCreateFlowAndLaunchPlanInput(ctx context.Context, obj any) (model.CreateFlowAndLaunchPlanInput, error) {
 	var it model.CreateFlowAndLaunchPlanInput
 	if obj == nil {
@@ -4661,6 +6394,43 @@ func (ec *executionContext) unmarshalInputCreateFlowInput(ctx context.Context, o
 	return it, nil
 }
 
+func (ec *executionContext) unmarshalInputFlowFilterInput(ctx context.Context, obj any) (model.FlowFilterInput, error) {
+	var it model.FlowFilterInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"repoPath", "statuses"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "repoPath":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("repoPath"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.RepoPath = data
+		case "statuses":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("statuses"))
+			data, err := ec.unmarshalOFlowStatus2ᚕgithubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐFlowStatusᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Statuses = data
+		}
+	}
+	return it, nil
+}
+
 func (ec *executionContext) unmarshalInputLaunchFlowPhaseInput(ctx context.Context, obj any) (model.LaunchFlowPhaseInput, error) {
 	var it model.LaunchFlowPhaseInput
 	if obj == nil {
@@ -4707,6 +6477,210 @@ func (ec *executionContext) unmarshalInputLaunchFlowPhaseInput(ctx context.Conte
 				return it, err
 			}
 			it.ReasoningEffort = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputRestartFlowPhaseInput(ctx context.Context, obj any) (model.RestartFlowPhaseInput, error) {
+	var it model.RestartFlowPhaseInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"flowId", "phaseId", "notes"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "flowId":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("flowId"))
+			data, err := ec.unmarshalNID2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.FlowID = data
+		case "phaseId":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("phaseId"))
+			data, err := ec.unmarshalNID2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.PhaseID = data
+		case "notes":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("notes"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Notes = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputSetFlowAutoModeInput(ctx context.Context, obj any) (model.SetFlowAutoModeInput, error) {
+	var it model.SetFlowAutoModeInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"flowId", "enabled"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "flowId":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("flowId"))
+			data, err := ec.unmarshalNID2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.FlowID = data
+		case "enabled":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("enabled"))
+			data, err := ec.unmarshalNBoolean2bool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Enabled = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputSetFlowMergeInput(ctx context.Context, obj any) (model.SetFlowMergeInput, error) {
+	var it model.SetFlowMergeInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"flowId", "status", "commit", "mergedAt"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "flowId":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("flowId"))
+			data, err := ec.unmarshalNID2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.FlowID = data
+		case "status":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("status"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Status = data
+		case "commit":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("commit"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Commit = data
+		case "mergedAt":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("mergedAt"))
+			data, err := ec.unmarshalOTime2ᚖtimeᚐTime(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.MergedAt = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputSetFlowPRInput(ctx context.Context, obj any) (model.SetFlowPRInput, error) {
+	var it model.SetFlowPRInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"flowId", "provider", "number", "url", "headBranch", "baseBranch", "status"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "flowId":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("flowId"))
+			data, err := ec.unmarshalNID2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.FlowID = data
+		case "provider":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("provider"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Provider = data
+		case "number":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("number"))
+			data, err := ec.unmarshalNInt2int(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Number = data
+		case "url":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("url"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.URL = data
+		case "headBranch":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("headBranch"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.HeadBranch = data
+		case "baseBranch":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("baseBranch"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.BaseBranch = data
+		case "status":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("status"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Status = data
 		}
 	}
 	return it, nil
@@ -4777,6 +6751,122 @@ func (ec *executionContext) unmarshalInputSetFlowPhaseStatusInput(ctx context.Co
 	return it, nil
 }
 
+func (ec *executionContext) unmarshalInputSetFlowPlanLinkInput(ctx context.Context, obj any) (model.SetFlowPlanLinkInput, error) {
+	var it model.SetFlowPlanLinkInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"flowId", "planId", "planPath"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "flowId":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("flowId"))
+			data, err := ec.unmarshalNID2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.FlowID = data
+		case "planId":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("planId"))
+			data, err := ec.unmarshalNID2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.PlanID = data
+		case "planPath":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("planPath"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.PlanPath = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputStartFlowInput(ctx context.Context, obj any) (model.StartFlowInput, error) {
+	var it model.StartFlowInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"repoPath", "title", "instructions", "baseRef", "launchPlan", "agentCommand", "reasoningEffort"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "repoPath":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("repoPath"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.RepoPath = data
+		case "title":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("title"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Title = data
+		case "instructions":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("instructions"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Instructions = data
+		case "baseRef":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("baseRef"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.BaseRef = data
+		case "launchPlan":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("launchPlan"))
+			data, err := ec.unmarshalNBoolean2bool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.LaunchPlan = data
+		case "agentCommand":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("agentCommand"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.AgentCommand = data
+		case "reasoningEffort":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("reasoningEffort"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ReasoningEffort = data
+		}
+	}
+	return it, nil
+}
+
 // endregion **************************** input.gotpl *****************************
 
 // region    ************************** interface.gotpl ***************************
@@ -4784,6 +6874,49 @@ func (ec *executionContext) unmarshalInputSetFlowPhaseStatusInput(ctx context.Co
 // endregion ************************** interface.gotpl ***************************
 
 // region    **************************** object.gotpl ****************************
+
+var addFlowChildPhasePayloadImplementors = []string{"AddFlowChildPhasePayload"}
+
+func (ec *executionContext) _AddFlowChildPhasePayload(ctx context.Context, sel ast.SelectionSet, obj *model.AddFlowChildPhasePayload) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, addFlowChildPhasePayloadImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("AddFlowChildPhasePayload")
+		case "flow":
+			out.Values[i] = ec._AddFlowChildPhasePayload_flow(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "phase":
+			out.Values[i] = ec._AddFlowChildPhasePayload_phase(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
 
 var createFlowAndLaunchPlanPayloadImplementors = []string{"CreateFlowAndLaunchPlanPayload"}
 
@@ -4814,6 +6947,44 @@ func (ec *executionContext) _CreateFlowAndLaunchPlanPayload(ctx context.Context,
 			}
 		case "launchError":
 			out.Values[i] = ec._CreateFlowAndLaunchPlanPayload_launchError(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var deleteFlowPayloadImplementors = []string{"DeleteFlowPayload"}
+
+func (ec *executionContext) _DeleteFlowPayload(ctx context.Context, sel ast.SelectionSet, obj *model.DeleteFlowPayload) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, deleteFlowPayloadImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("DeleteFlowPayload")
+		case "deletedId":
+			out.Values[i] = ec._DeleteFlowPayload_deletedId(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -5028,6 +7199,16 @@ func (ec *executionContext) _FlowPhase(ctx context.Context, sel ast.SelectionSet
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "launchIds":
+			out.Values[i] = ec._FlowPhase_launchIds(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "sessions":
+			out.Values[i] = ec._FlowPhase_sessions(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		case "latestLaunchId":
 			out.Values[i] = ec._FlowPhase_latestLaunchId(ctx, field, obj)
 			if out.Values[i] == graphql.RequiredNull {
@@ -5061,6 +7242,74 @@ func (ec *executionContext) _FlowPhase(ctx context.Context, sel ast.SelectionSet
 		case "activeRuntimeJob":
 			out.Values[i] = ec._FlowPhase_activeRuntimeJob(ctx, field, obj)
 			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var flowSessionImplementors = []string{"FlowSession"}
+
+func (ec *executionContext) _FlowSession(ctx context.Context, sel ast.SelectionSet, obj *model.FlowSession) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, flowSessionImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("FlowSession")
+		case "provider":
+			out.Values[i] = ec._FlowSession_provider(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "sessionId":
+			out.Values[i] = ec._FlowSession_sessionId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "launchId":
+			out.Values[i] = ec._FlowSession_launchId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "status":
+			out.Values[i] = ec._FlowSession_status(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "startedAt":
+			out.Values[i] = ec._FlowSession_startedAt(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "endedAt":
+			out.Values[i] = ec._FlowSession_endedAt(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "transcriptPath":
+			out.Values[i] = ec._FlowSession_transcriptPath(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
 		default:
@@ -5219,6 +7468,13 @@ func (ec *executionContext) _Mutation(ctx context.Context, sel ast.SelectionSet)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "startFlow":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_startFlow(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		case "launchFlowPhase":
 			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
 				return ec._Mutation_launchFlowPhase(ctx, field)
@@ -5236,6 +7492,55 @@ func (ec *executionContext) _Mutation(ctx context.Context, sel ast.SelectionSet)
 		case "setFlowPhaseStatus":
 			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
 				return ec._Mutation_setFlowPhaseStatus(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "restartFlowPhase":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_restartFlowPhase(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "addFlowChildPhase":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_addFlowChildPhase(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "setFlowPlanLink":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_setFlowPlanLink(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "setFlowPR":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_setFlowPR(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "setFlowMerge":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_setFlowMerge(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "setFlowAutoMode":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_setFlowAutoMode(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "deleteFlow":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_deleteFlow(ctx, field)
 			})
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
@@ -5445,6 +7750,49 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 	return out
 }
 
+var restartFlowPhasePayloadImplementors = []string{"RestartFlowPhasePayload"}
+
+func (ec *executionContext) _RestartFlowPhasePayload(ctx context.Context, sel ast.SelectionSet, obj *model.RestartFlowPhasePayload) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, restartFlowPhasePayloadImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("RestartFlowPhasePayload")
+		case "flow":
+			out.Values[i] = ec._RestartFlowPhasePayload_flow(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "phase":
+			out.Values[i] = ec._RestartFlowPhasePayload_phase(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
 var runtimeJobImplementors = []string{"RuntimeJob"}
 
 func (ec *executionContext) _RuntimeJob(ctx context.Context, sel ast.SelectionSet, obj *model.RuntimeJob) graphql.Marshaler {
@@ -5543,6 +7891,130 @@ func (ec *executionContext) _RuntimeJob(ctx context.Context, sel ast.SelectionSe
 	return out
 }
 
+var setFlowAutoModePayloadImplementors = []string{"SetFlowAutoModePayload"}
+
+func (ec *executionContext) _SetFlowAutoModePayload(ctx context.Context, sel ast.SelectionSet, obj *model.SetFlowAutoModePayload) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, setFlowAutoModePayloadImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("SetFlowAutoModePayload")
+		case "flow":
+			out.Values[i] = ec._SetFlowAutoModePayload_flow(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var setFlowMergePayloadImplementors = []string{"SetFlowMergePayload"}
+
+func (ec *executionContext) _SetFlowMergePayload(ctx context.Context, sel ast.SelectionSet, obj *model.SetFlowMergePayload) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, setFlowMergePayloadImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("SetFlowMergePayload")
+		case "flow":
+			out.Values[i] = ec._SetFlowMergePayload_flow(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "merge":
+			out.Values[i] = ec._SetFlowMergePayload_merge(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var setFlowPRPayloadImplementors = []string{"SetFlowPRPayload"}
+
+func (ec *executionContext) _SetFlowPRPayload(ctx context.Context, sel ast.SelectionSet, obj *model.SetFlowPRPayload) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, setFlowPRPayloadImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("SetFlowPRPayload")
+		case "flow":
+			out.Values[i] = ec._SetFlowPRPayload_flow(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "pr":
+			out.Values[i] = ec._SetFlowPRPayload_pr(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
 var setFlowPhaseStatusPayloadImplementors = []string{"SetFlowPhaseStatusPayload"}
 
 func (ec *executionContext) _SetFlowPhaseStatusPayload(ctx context.Context, sel ast.SelectionSet, obj *model.SetFlowPhaseStatusPayload) graphql.Marshaler {
@@ -5562,6 +8034,97 @@ func (ec *executionContext) _SetFlowPhaseStatusPayload(ctx context.Context, sel 
 			}
 		case "phase":
 			out.Values[i] = ec._SetFlowPhaseStatusPayload_phase(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var setFlowPlanLinkPayloadImplementors = []string{"SetFlowPlanLinkPayload"}
+
+func (ec *executionContext) _SetFlowPlanLinkPayload(ctx context.Context, sel ast.SelectionSet, obj *model.SetFlowPlanLinkPayload) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, setFlowPlanLinkPayloadImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("SetFlowPlanLinkPayload")
+		case "flow":
+			out.Values[i] = ec._SetFlowPlanLinkPayload_flow(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var startFlowPayloadImplementors = []string{"StartFlowPayload"}
+
+func (ec *executionContext) _StartFlowPayload(ctx context.Context, sel ast.SelectionSet, obj *model.StartFlowPayload) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, startFlowPayloadImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("StartFlowPayload")
+		case "flow":
+			out.Values[i] = ec._StartFlowPayload_flow(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "launchId":
+			out.Values[i] = ec._StartFlowPayload_launchId(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "job":
+			out.Values[i] = ec._StartFlowPayload_job(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "launchError":
+			out.Values[i] = ec._StartFlowPayload_launchError(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -5978,6 +8541,25 @@ func (ec *executionContext) ___Type(ctx context.Context, sel ast.SelectionSet, o
 
 // region    ***************************** type.gotpl *****************************
 
+func (ec *executionContext) unmarshalNAddFlowChildPhaseInput2githubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐAddFlowChildPhaseInput(ctx context.Context, v any) (model.AddFlowChildPhaseInput, error) {
+	res, err := ec.unmarshalInputAddFlowChildPhaseInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNAddFlowChildPhasePayload2githubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐAddFlowChildPhasePayload(ctx context.Context, sel ast.SelectionSet, v model.AddFlowChildPhasePayload) graphql.Marshaler {
+	return ec._AddFlowChildPhasePayload(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNAddFlowChildPhasePayload2ᚖgithubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐAddFlowChildPhasePayload(ctx context.Context, sel ast.SelectionSet, v *model.AddFlowChildPhasePayload) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._AddFlowChildPhasePayload(ctx, sel, v)
+}
+
 func (ec *executionContext) unmarshalNBoolean2bool(ctx context.Context, v any) (bool, error) {
 	res, err := graphql.UnmarshalBoolean(v)
 	return res, graphql.ErrorOnPath(ctx, err)
@@ -6016,6 +8598,20 @@ func (ec *executionContext) marshalNCreateFlowAndLaunchPlanPayload2ᚖgithubᚗc
 func (ec *executionContext) unmarshalNCreateFlowInput2githubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐCreateFlowInput(ctx context.Context, v any) (model.CreateFlowInput, error) {
 	res, err := ec.unmarshalInputCreateFlowInput(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNDeleteFlowPayload2githubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐDeleteFlowPayload(ctx context.Context, sel ast.SelectionSet, v model.DeleteFlowPayload) graphql.Marshaler {
+	return ec._DeleteFlowPayload(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNDeleteFlowPayload2ᚖgithubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐDeleteFlowPayload(ctx context.Context, sel ast.SelectionSet, v *model.DeleteFlowPayload) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._DeleteFlowPayload(ctx, sel, v)
 }
 
 func (ec *executionContext) marshalNFlow2githubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐFlow(ctx context.Context, sel ast.SelectionSet, v model.Flow) graphql.Marshaler {
@@ -6125,6 +8721,32 @@ func (ec *executionContext) marshalNFlowPhaseStatusInput2githubᚗcomᚋbrianᚑ
 	return v
 }
 
+func (ec *executionContext) marshalNFlowSession2ᚕᚖgithubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐFlowSessionᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.FlowSession) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNFlowSession2ᚖgithubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐFlowSession(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNFlowSession2ᚖgithubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐFlowSession(ctx context.Context, sel ast.SelectionSet, v *model.FlowSession) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._FlowSession(ctx, sel, v)
+}
+
 func (ec *executionContext) unmarshalNFlowStatus2githubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐFlowStatus(ctx context.Context, v any) (model.FlowStatus, error) {
 	var res model.FlowStatus
 	err := res.UnmarshalGQL(v)
@@ -6206,6 +8828,25 @@ func (ec *executionContext) marshalNPullRequest2ᚖgithubᚗcomᚋbrianᚑbell�
 	return ec._PullRequest(ctx, sel, v)
 }
 
+func (ec *executionContext) unmarshalNRestartFlowPhaseInput2githubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐRestartFlowPhaseInput(ctx context.Context, v any) (model.RestartFlowPhaseInput, error) {
+	res, err := ec.unmarshalInputRestartFlowPhaseInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNRestartFlowPhasePayload2githubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐRestartFlowPhasePayload(ctx context.Context, sel ast.SelectionSet, v model.RestartFlowPhasePayload) graphql.Marshaler {
+	return ec._RestartFlowPhasePayload(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNRestartFlowPhasePayload2ᚖgithubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐRestartFlowPhasePayload(ctx context.Context, sel ast.SelectionSet, v *model.RestartFlowPhasePayload) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._RestartFlowPhasePayload(ctx, sel, v)
+}
+
 func (ec *executionContext) marshalNRuntimeJob2githubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐRuntimeJob(ctx context.Context, sel ast.SelectionSet, v model.RuntimeJob) graphql.Marshaler {
 	return ec._RuntimeJob(ctx, sel, &v)
 }
@@ -6218,6 +8859,63 @@ func (ec *executionContext) marshalNRuntimeJob2ᚖgithubᚗcomᚋbrianᚑbellᚋ
 		return graphql.Null
 	}
 	return ec._RuntimeJob(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNSetFlowAutoModeInput2githubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐSetFlowAutoModeInput(ctx context.Context, v any) (model.SetFlowAutoModeInput, error) {
+	res, err := ec.unmarshalInputSetFlowAutoModeInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNSetFlowAutoModePayload2githubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐSetFlowAutoModePayload(ctx context.Context, sel ast.SelectionSet, v model.SetFlowAutoModePayload) graphql.Marshaler {
+	return ec._SetFlowAutoModePayload(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNSetFlowAutoModePayload2ᚖgithubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐSetFlowAutoModePayload(ctx context.Context, sel ast.SelectionSet, v *model.SetFlowAutoModePayload) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._SetFlowAutoModePayload(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNSetFlowMergeInput2githubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐSetFlowMergeInput(ctx context.Context, v any) (model.SetFlowMergeInput, error) {
+	res, err := ec.unmarshalInputSetFlowMergeInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNSetFlowMergePayload2githubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐSetFlowMergePayload(ctx context.Context, sel ast.SelectionSet, v model.SetFlowMergePayload) graphql.Marshaler {
+	return ec._SetFlowMergePayload(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNSetFlowMergePayload2ᚖgithubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐSetFlowMergePayload(ctx context.Context, sel ast.SelectionSet, v *model.SetFlowMergePayload) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._SetFlowMergePayload(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNSetFlowPRInput2githubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐSetFlowPRInput(ctx context.Context, v any) (model.SetFlowPRInput, error) {
+	res, err := ec.unmarshalInputSetFlowPRInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNSetFlowPRPayload2githubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐSetFlowPRPayload(ctx context.Context, sel ast.SelectionSet, v model.SetFlowPRPayload) graphql.Marshaler {
+	return ec._SetFlowPRPayload(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNSetFlowPRPayload2ᚖgithubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐSetFlowPRPayload(ctx context.Context, sel ast.SelectionSet, v *model.SetFlowPRPayload) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._SetFlowPRPayload(ctx, sel, v)
 }
 
 func (ec *executionContext) unmarshalNSetFlowPhaseStatusInput2githubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐSetFlowPhaseStatusInput(ctx context.Context, v any) (model.SetFlowPhaseStatusInput, error) {
@@ -6239,6 +8937,44 @@ func (ec *executionContext) marshalNSetFlowPhaseStatusPayload2ᚖgithubᚗcomᚋ
 	return ec._SetFlowPhaseStatusPayload(ctx, sel, v)
 }
 
+func (ec *executionContext) unmarshalNSetFlowPlanLinkInput2githubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐSetFlowPlanLinkInput(ctx context.Context, v any) (model.SetFlowPlanLinkInput, error) {
+	res, err := ec.unmarshalInputSetFlowPlanLinkInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNSetFlowPlanLinkPayload2githubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐSetFlowPlanLinkPayload(ctx context.Context, sel ast.SelectionSet, v model.SetFlowPlanLinkPayload) graphql.Marshaler {
+	return ec._SetFlowPlanLinkPayload(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNSetFlowPlanLinkPayload2ᚖgithubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐSetFlowPlanLinkPayload(ctx context.Context, sel ast.SelectionSet, v *model.SetFlowPlanLinkPayload) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._SetFlowPlanLinkPayload(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNStartFlowInput2githubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐStartFlowInput(ctx context.Context, v any) (model.StartFlowInput, error) {
+	res, err := ec.unmarshalInputStartFlowInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNStartFlowPayload2githubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐStartFlowPayload(ctx context.Context, sel ast.SelectionSet, v model.StartFlowPayload) graphql.Marshaler {
+	return ec._StartFlowPayload(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNStartFlowPayload2ᚖgithubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐStartFlowPayload(ctx context.Context, sel ast.SelectionSet, v *model.StartFlowPayload) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._StartFlowPayload(ctx, sel, v)
+}
+
 func (ec *executionContext) unmarshalNString2string(ctx context.Context, v any) (string, error) {
 	res, err := graphql.UnmarshalString(v)
 	return res, graphql.ErrorOnPath(ctx, err)
@@ -6253,6 +8989,36 @@ func (ec *executionContext) marshalNString2string(ctx context.Context, sel ast.S
 		}
 	}
 	return res
+}
+
+func (ec *executionContext) unmarshalNString2ᚕstringᚄ(ctx context.Context, v any) ([]string, error) {
+	var vSlice []any
+	vSlice = graphql.CoerceList(v)
+	var err error
+	res := make([]string, len(vSlice))
+	for i := range vSlice {
+		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
+		res[i], err = ec.unmarshalNString2string(ctx, vSlice[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return res, nil
+}
+
+func (ec *executionContext) marshalNString2ᚕstringᚄ(ctx context.Context, sel ast.SelectionSet, v []string) graphql.Marshaler {
+	ret := make(graphql.Array, len(v))
+	for i := range v {
+		ret[i] = ec.marshalNString2string(ctx, sel, v[i])
+	}
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
 }
 
 func (ec *executionContext) unmarshalNTime2timeᚐTime(ctx context.Context, v any) (time.Time, error) {
@@ -6447,6 +9213,14 @@ func (ec *executionContext) marshalOFlow2ᚖgithubᚗcomᚋbrianᚑbellᚋflowst
 		return graphql.Null
 	}
 	return ec._Flow(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalOFlowFilterInput2ᚖgithubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐFlowFilterInput(ctx context.Context, v any) (*model.FlowFilterInput, error) {
+	if v == nil {
+		return nil, nil
+	}
+	res, err := ec.unmarshalInputFlowFilterInput(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
 }
 
 func (ec *executionContext) marshalOFlowPhase2ᚖgithubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐFlowPhase(ctx context.Context, sel ast.SelectionSet, v *model.FlowPhase) graphql.Marshaler {

@@ -10,6 +10,19 @@ import (
 	"time"
 )
 
+type AddFlowChildPhaseInput struct {
+	FlowID        string `json:"flowId"`
+	ParentPhaseID string `json:"parentPhaseId"`
+	PhaseID       string `json:"phaseId"`
+	Title         string `json:"title"`
+	Order         int    `json:"order"`
+}
+
+type AddFlowChildPhasePayload struct {
+	Flow  *Flow      `json:"flow"`
+	Phase *FlowPhase `json:"phase"`
+}
+
 type CreateFlowAndLaunchPlanInput struct {
 	RepoPath        string  `json:"repoPath"`
 	Title           string  `json:"title"`
@@ -31,6 +44,10 @@ type CreateFlowInput struct {
 	Title        string  `json:"title"`
 	Instructions string  `json:"instructions"`
 	BaseRef      *string `json:"baseRef,omitempty"`
+}
+
+type DeleteFlowPayload struct {
+	DeletedID string `json:"deletedId"`
 }
 
 type Flow struct {
@@ -55,6 +72,11 @@ type Flow struct {
 	NextLaunchablePhase *FlowPhase   `json:"nextLaunchablePhase,omitempty"`
 }
 
+type FlowFilterInput struct {
+	RepoPath *string      `json:"repoPath,omitempty"`
+	Statuses []FlowStatus `json:"statuses,omitempty"`
+}
+
 type FlowPhase struct {
 	PhaseID             string                       `json:"phaseId"`
 	ParentPhaseID       string                       `json:"parentPhaseId"`
@@ -66,6 +88,8 @@ type FlowPhase struct {
 	Outcome             string                       `json:"outcome"`
 	Notes               string                       `json:"notes"`
 	Summary             string                       `json:"summary"`
+	LaunchIds           []string                     `json:"launchIds"`
+	Sessions            []*FlowSession               `json:"sessions"`
 	LatestLaunchID      *string                      `json:"latestLaunchId,omitempty"`
 	CreatedAt           time.Time                    `json:"createdAt"`
 	UpdatedAt           time.Time                    `json:"updatedAt"`
@@ -73,6 +97,16 @@ type FlowPhase struct {
 	Launchable          bool                         `json:"launchable"`
 	StaleRunningStatus  *FlowPhaseStaleRunningStatus `json:"staleRunningStatus,omitempty"`
 	ActiveRuntimeJob    *RuntimeJob                  `json:"activeRuntimeJob,omitempty"`
+}
+
+type FlowSession struct {
+	Provider       string     `json:"provider"`
+	SessionID      string     `json:"sessionId"`
+	LaunchID       string     `json:"launchId"`
+	Status         string     `json:"status"`
+	StartedAt      *time.Time `json:"startedAt,omitempty"`
+	EndedAt        *time.Time `json:"endedAt,omitempty"`
+	TranscriptPath string     `json:"transcriptPath"`
 }
 
 type LaunchFlowPhaseInput struct {
@@ -110,6 +144,17 @@ type PullRequest struct {
 type Query struct {
 }
 
+type RestartFlowPhaseInput struct {
+	FlowID  string  `json:"flowId"`
+	PhaseID string  `json:"phaseId"`
+	Notes   *string `json:"notes,omitempty"`
+}
+
+type RestartFlowPhasePayload struct {
+	Flow  *Flow      `json:"flow"`
+	Phase *FlowPhase `json:"phase"`
+}
+
 type RuntimeJob struct {
 	ID               string     `json:"id"`
 	LaunchID         string     `json:"launchId"`
@@ -126,6 +171,42 @@ type RuntimeJob struct {
 	LogTruncated     bool       `json:"logTruncated"`
 }
 
+type SetFlowAutoModeInput struct {
+	FlowID  string `json:"flowId"`
+	Enabled bool   `json:"enabled"`
+}
+
+type SetFlowAutoModePayload struct {
+	Flow *Flow `json:"flow"`
+}
+
+type SetFlowMergeInput struct {
+	FlowID   string     `json:"flowId"`
+	Status   string     `json:"status"`
+	Commit   *string    `json:"commit,omitempty"`
+	MergedAt *time.Time `json:"mergedAt,omitempty"`
+}
+
+type SetFlowMergePayload struct {
+	Flow  *Flow  `json:"flow"`
+	Merge *Merge `json:"merge"`
+}
+
+type SetFlowPRInput struct {
+	FlowID     string  `json:"flowId"`
+	Provider   string  `json:"provider"`
+	Number     int     `json:"number"`
+	URL        string  `json:"url"`
+	HeadBranch string  `json:"headBranch"`
+	BaseBranch string  `json:"baseBranch"`
+	Status     *string `json:"status,omitempty"`
+}
+
+type SetFlowPRPayload struct {
+	Flow *Flow        `json:"flow"`
+	Pr   *PullRequest `json:"pr"`
+}
+
 type SetFlowPhaseStatusInput struct {
 	FlowID  string               `json:"flowId"`
 	PhaseID string               `json:"phaseId"`
@@ -138,6 +219,33 @@ type SetFlowPhaseStatusInput struct {
 type SetFlowPhaseStatusPayload struct {
 	Flow  *Flow      `json:"flow"`
 	Phase *FlowPhase `json:"phase"`
+}
+
+type SetFlowPlanLinkInput struct {
+	FlowID   string `json:"flowId"`
+	PlanID   string `json:"planId"`
+	PlanPath string `json:"planPath"`
+}
+
+type SetFlowPlanLinkPayload struct {
+	Flow *Flow `json:"flow"`
+}
+
+type StartFlowInput struct {
+	RepoPath        string  `json:"repoPath"`
+	Title           string  `json:"title"`
+	Instructions    string  `json:"instructions"`
+	BaseRef         *string `json:"baseRef,omitempty"`
+	LaunchPlan      bool    `json:"launchPlan"`
+	AgentCommand    *string `json:"agentCommand,omitempty"`
+	ReasoningEffort *string `json:"reasoningEffort,omitempty"`
+}
+
+type StartFlowPayload struct {
+	Flow        *Flow       `json:"flow"`
+	LaunchID    *string     `json:"launchId,omitempty"`
+	Job         *RuntimeJob `json:"job,omitempty"`
+	LaunchError string      `json:"launchError"`
 }
 
 type FlowPhaseStaleRunningStatus string

@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -132,6 +133,129 @@ func TestHandlerGraphQLListsFlowsWithFilteringAndComputedFields(t *testing.T) {
 	}
 }
 
+func TestHandlerGraphQLListsFlowsWithRepoPathFilter(t *testing.T) {
+	store, _ := newFlowGraphQLStore(t)
+	repoA := t.TempDir()
+	repoB := t.TempDir()
+	matching := createGraphQLFlow(t, store, flowstore.FlowRecord{
+		FlowID:       "matching-flow",
+		Title:        "Matching Flow",
+		Instructions: "matching instructions",
+		RepoPath:     repoA,
+	})
+	createGraphQLFlow(t, store, flowstore.FlowRecord{
+		FlowID:       "other-flow",
+		Title:        "Other Flow",
+		Instructions: "other instructions",
+		RepoPath:     repoB,
+	})
+	handler := newFlowGraphQLHandler(t, store)
+
+	var out struct {
+		Data struct {
+			Flows []struct {
+				ID       string `json:"id"`
+				RepoPath string `json:"repoPath"`
+			} `json:"flows"`
+		} `json:"data"`
+		Errors []any `json:"errors"`
+	}
+	postGraphQL(t, handler, `query($filter: FlowFilterInput) {
+		flows(filter: $filter) { id repoPath }
+	}`, map[string]any{"filter": map[string]any{"repoPath": repoA}}, &out)
+
+	if len(out.Errors) != 0 {
+		t.Fatalf("GraphQL errors: %#v", out.Errors)
+	}
+	if got := flowIDs(out.Data.Flows); !equalStrings(got, []string{matching.FlowID}) {
+		t.Fatalf("filtered flow IDs = %#v, want %#v", got, []string{matching.FlowID})
+	}
+	if out.Data.Flows[0].RepoPath != repoA {
+		t.Fatalf("repoPath = %q, want %q", out.Data.Flows[0].RepoPath, repoA)
+	}
+}
+
+func TestHandlerGraphQLFlowPhaseIncludesPersistedLaunchesAndSessions(t *testing.T) {
+	store, _ := newFlowGraphQLStore(t)
+	record := createGraphQLFlow(t, store, flowstore.FlowRecord{
+		FlowID:       "session-flow",
+		Title:        "Session Flow",
+		Instructions: "session instructions",
+		RepoPath:     t.TempDir(),
+	})
+	record, err := store.AddPhaseLaunchID(flowstore.PhaseLaunchUpdate{
+		FlowID:   record.FlowID,
+		PhaseID:  "plan",
+		LaunchID: "launch-1",
+	})
+	if err != nil {
+		t.Fatalf("AddPhaseLaunchID: %v", err)
+	}
+	started := time.Date(2026, 6, 29, 13, 0, 0, 0, time.UTC)
+	ended := started.Add(time.Minute)
+	_, err = store.AttachSession(flowstore.SessionAttachUpdate{
+		FlowID:  record.FlowID,
+		PhaseID: "plan",
+		Session: flowstore.Session{
+			Provider:       "codex",
+			SessionID:      "session-1",
+			LaunchID:       "launch-1",
+			Status:         "completed",
+			StartedAt:      started,
+			EndedAt:        ended,
+			TranscriptPath: "/tmp/transcript.jsonl",
+		},
+	})
+	if err != nil {
+		t.Fatalf("AttachSession: %v", err)
+	}
+	handler := newFlowGraphQLHandler(t, store)
+
+	var out struct {
+		Data struct {
+			Flow struct {
+				Phases []struct {
+					PhaseID   string   `json:"phaseId"`
+					LaunchIDs []string `json:"launchIds"`
+					Sessions  []struct {
+						Provider       string     `json:"provider"`
+						SessionID      string     `json:"sessionId"`
+						LaunchID       string     `json:"launchId"`
+						Status         string     `json:"status"`
+						StartedAt      *time.Time `json:"startedAt"`
+						EndedAt        *time.Time `json:"endedAt"`
+						TranscriptPath string     `json:"transcriptPath"`
+					} `json:"sessions"`
+				} `json:"phases"`
+			} `json:"flow"`
+		} `json:"data"`
+		Errors []any `json:"errors"`
+	}
+	postGraphQL(t, handler, `query($id: ID!) {
+		flow(id: $id) {
+			phases {
+				phaseId
+				launchIds
+				sessions { provider sessionId launchId status startedAt endedAt transcriptPath }
+			}
+		}
+	}`, map[string]any{"id": record.FlowID}, &out)
+
+	if len(out.Errors) != 0 {
+		t.Fatalf("GraphQL errors: %#v", out.Errors)
+	}
+	phase := out.Data.Flow.Phases[0]
+	if phase.PhaseID != "plan" || !equalStrings(phase.LaunchIDs, []string{"launch-1"}) || len(phase.Sessions) != 1 {
+		t.Fatalf("phase launch/session payload = %#v", phase)
+	}
+	session := phase.Sessions[0]
+	if session.Provider != "codex" || session.SessionID != "session-1" || session.LaunchID != "launch-1" ||
+		session.Status != "completed" || session.StartedAt == nil || !session.StartedAt.Equal(started) ||
+		session.EndedAt == nil || !session.EndedAt.Equal(ended) || session.TranscriptPath != "/tmp/transcript.jsonl" {
+		t.Fatalf("session payload = %#v", session)
+	}
+}
+
 func TestHandlerGraphQLCreateFlowMutationIsAvailable(t *testing.T) {
 	store, _ := newFlowGraphQLStore(t)
 	creator := &staticFlowCreator{
@@ -180,6 +304,365 @@ func TestHandlerGraphQLCreateFlowMutationIsAvailable(t *testing.T) {
 		len(out.Data.CreateFlow.Phases) != 1 ||
 		out.Data.CreateFlow.Phases[0].PhaseID != "plan" {
 		t.Fatalf("createFlow response = %#v input = %#v", out.Data.CreateFlow, creator.input)
+	}
+}
+
+func TestHandlerGraphQLReadOnlyFlowReaderRejectsExistingMutations(t *testing.T) {
+	store, _ := newFlowGraphQLStore(t)
+	record := createGraphQLFlow(t, store, flowstore.FlowRecord{
+		FlowID:       "readonly-flow",
+		Title:        "Read-only Flow",
+		Instructions: "cannot mutate through reader-only handler",
+		RepoPath:     t.TempDir(),
+	})
+	handler := newFlowGraphQLHandlerWithOptions(t, server.HandlerOptions{
+		FlowReader: store,
+	})
+
+	for _, tt := range []struct {
+		name      string
+		query     string
+		variables map[string]any
+	}{
+		{
+			name: "createFlow",
+			query: `mutation($input: CreateFlowInput!) {
+				createFlow(input: $input) { id }
+			}`,
+			variables: map[string]any{"input": map[string]any{
+				"repoPath":     t.TempDir(),
+				"title":        "New Flow",
+				"instructions": "new instructions",
+			}},
+		},
+		{
+			name: "createFlowAndLaunchPlan",
+			query: `mutation($input: CreateFlowAndLaunchPlanInput!) {
+				createFlowAndLaunchPlan(input: $input) { flow { id } launchError }
+			}`,
+			variables: map[string]any{"input": map[string]any{
+				"repoPath":     t.TempDir(),
+				"title":        "New Flow",
+				"instructions": "new instructions",
+				"agentCommand": "codex",
+			}},
+		},
+		{
+			name:  "launchFlowPhase",
+			query: `mutation($input: LaunchFlowPhaseInput!) { launchFlowPhase(input: $input) { launchId } }`,
+			variables: map[string]any{"input": map[string]any{
+				"flowId":       record.FlowID,
+				"phaseId":      "plan",
+				"agentCommand": "codex",
+			}},
+		},
+		{
+			name:  "setFlowPhaseStatus",
+			query: setFlowPhaseStatusMutation,
+			variables: map[string]any{"input": map[string]any{
+				"flowId":  record.FlowID,
+				"phaseId": "plan",
+				"status":  "COMPLETED",
+			}},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var out struct {
+				Data   any   `json:"data"`
+				Errors []any `json:"errors"`
+			}
+			postGraphQL(t, handler, tt.query, tt.variables, &out)
+			if !graphQLErrorsContain(out.Errors, "flow store is read-only") {
+				t.Fatalf("GraphQL errors = %#v, want read-only store error", out.Errors)
+			}
+		})
+	}
+}
+
+func TestHandlerGraphQLNewFlowMutationsDelegateToStore(t *testing.T) {
+	store, root := newFlowGraphQLStore(t)
+	record := createGraphQLFlow(t, store, flowstore.FlowRecord{
+		FlowID:       "mutation-flow",
+		Title:        "Mutation Flow",
+		Instructions: "mutation instructions",
+		RepoPath:     t.TempDir(),
+		Branch:       "flow/test",
+	})
+	blocked, err := store.SetPhase(flowstore.PhaseUpdate{
+		FlowID:  record.FlowID,
+		PhaseID: "plan",
+		Status:  flowstore.PhaseBlocked,
+		Notes:   "blocked",
+	})
+	if err != nil {
+		t.Fatalf("SetPhase blocked: %v", err)
+	}
+	record = blocked
+	planStore, err := planstore.NewStore(planstore.StoreOptions{Root: root})
+	if err != nil {
+		t.Fatalf("New plan store: %v", err)
+	}
+	planID, err := planStore.Save(planstore.PlanRecord{PlanID: "linked-plan", Title: "Linked Plan", Markdown: "# Plan\n"})
+	if err != nil {
+		t.Fatalf("Save plan: %v", err)
+	}
+	planPath, err := planstore.MarkdownPath(root, planID)
+	if err != nil {
+		t.Fatalf("MarkdownPath: %v", err)
+	}
+	handler := newFlowGraphQLHandler(t, store)
+
+	var restart struct {
+		Data struct {
+			RestartFlowPhase struct {
+				Phase graphQLPhase `json:"phase"`
+			} `json:"restartFlowPhase"`
+		} `json:"data"`
+		Errors []any `json:"errors"`
+	}
+	postGraphQL(t, handler, `mutation($input: RestartFlowPhaseInput!) {
+		restartFlowPhase(input: $input) { phase { phaseId statusRaw notes } }
+	}`, map[string]any{"input": map[string]any{
+		"flowId":  record.FlowID,
+		"phaseId": "PLAN",
+		"notes":   "rerun",
+	}}, &restart)
+	if len(restart.Errors) != 0 || restart.Data.RestartFlowPhase.Phase.StatusRaw != flowstore.PhaseRunning ||
+		restart.Data.RestartFlowPhase.Phase.PhaseID != "plan" {
+		t.Fatalf("restart response = %#v errors %#v", restart.Data.RestartFlowPhase, restart.Errors)
+	}
+
+	var child struct {
+		Data struct {
+			AddFlowChildPhase struct {
+				Phase struct {
+					PhaseID       string `json:"phaseId"`
+					ParentPhaseID string `json:"parentPhaseId"`
+					Title         string `json:"title"`
+					Kind          string `json:"kind"`
+					Order         int    `json:"order"`
+				} `json:"phase"`
+			} `json:"addFlowChildPhase"`
+		} `json:"data"`
+		Errors []any `json:"errors"`
+	}
+	postGraphQL(t, handler, `mutation($input: AddFlowChildPhaseInput!) {
+		addFlowChildPhase(input: $input) { phase { phaseId parentPhaseId title kind order } }
+	}`, map[string]any{"input": map[string]any{
+		"flowId":        record.FlowID,
+		"parentPhaseId": "implementation",
+		"phaseId":       "implementation-api",
+		"title":         "API",
+		"order":         11,
+	}}, &child)
+	if len(child.Errors) != 0 || child.Data.AddFlowChildPhase.Phase.PhaseID != "implementation-api" ||
+		child.Data.AddFlowChildPhase.Phase.ParentPhaseID != "implementation" ||
+		child.Data.AddFlowChildPhase.Phase.Kind != "implementation_child" {
+		t.Fatalf("child response = %#v errors %#v", child.Data.AddFlowChildPhase, child.Errors)
+	}
+
+	var planLink struct {
+		Data struct {
+			SetFlowPlanLink struct {
+				Flow struct {
+					PlanID   string `json:"planId"`
+					PlanPath string `json:"planPath"`
+				} `json:"flow"`
+			} `json:"setFlowPlanLink"`
+		} `json:"data"`
+		Errors []any `json:"errors"`
+	}
+	postGraphQL(t, handler, `mutation($input: SetFlowPlanLinkInput!) {
+		setFlowPlanLink(input: $input) { flow { planId planPath } }
+	}`, map[string]any{"input": map[string]any{
+		"flowId":   record.FlowID,
+		"planId":   planID,
+		"planPath": planPath,
+	}}, &planLink)
+	if len(planLink.Errors) != 0 || planLink.Data.SetFlowPlanLink.Flow.PlanID != planID ||
+		planLink.Data.SetFlowPlanLink.Flow.PlanPath != planPath {
+		t.Fatalf("plan link response = %#v errors %#v", planLink.Data.SetFlowPlanLink, planLink.Errors)
+	}
+
+	var pr struct {
+		Data struct {
+			SetFlowPR struct {
+				Pr struct {
+					Provider   string `json:"provider"`
+					Number     int    `json:"number"`
+					HeadBranch string `json:"headBranch"`
+					Status     string `json:"status"`
+				} `json:"pr"`
+			} `json:"setFlowPR"`
+		} `json:"data"`
+		Errors []any `json:"errors"`
+	}
+	postGraphQL(t, handler, `mutation($input: SetFlowPRInput!) {
+		setFlowPR(input: $input) { pr { provider number headBranch status } }
+	}`, map[string]any{"input": map[string]any{
+		"flowId":     record.FlowID,
+		"provider":   "github",
+		"number":     7,
+		"url":        "https://github.com/brian-bell/flowstate/pull/7",
+		"headBranch": "flow/test",
+		"baseBranch": "main",
+		"status":     "open",
+	}}, &pr)
+	if len(pr.Errors) != 0 || pr.Data.SetFlowPR.Pr.Provider != "github" || pr.Data.SetFlowPR.Pr.Number != 7 ||
+		pr.Data.SetFlowPR.Pr.HeadBranch != "flow/test" || pr.Data.SetFlowPR.Pr.Status != "open" {
+		t.Fatalf("PR response = %#v errors %#v", pr.Data.SetFlowPR, pr.Errors)
+	}
+
+	var autoMode struct {
+		Data struct {
+			SetFlowAutoMode struct {
+				Flow struct {
+					AutoMode bool `json:"autoMode"`
+				} `json:"flow"`
+			} `json:"setFlowAutoMode"`
+		} `json:"data"`
+		Errors []any `json:"errors"`
+	}
+	postGraphQL(t, handler, `mutation($input: SetFlowAutoModeInput!) {
+		setFlowAutoMode(input: $input) { flow { autoMode } }
+	}`, map[string]any{"input": map[string]any{"flowId": record.FlowID, "enabled": false}}, &autoMode)
+	if len(autoMode.Errors) != 0 || autoMode.Data.SetFlowAutoMode.Flow.AutoMode {
+		t.Fatalf("auto mode response = %#v errors %#v", autoMode.Data.SetFlowAutoMode, autoMode.Errors)
+	}
+
+	mergeRecord := createGraphQLFlow(t, store, flowstore.FlowRecord{
+		FlowID:       "merge-mutation-flow",
+		Title:        "Merge Mutation Flow",
+		Instructions: "merge mutation instructions",
+		RepoPath:     t.TempDir(),
+		Phases: []flowstore.FlowPhase{{
+			PhaseID:   "merge",
+			Title:     "Merge",
+			Status:    flowstore.PhaseBlocked,
+			Notes:     "waiting on CI",
+			Order:     7,
+			CreatedAt: time.Now().UTC(),
+			UpdatedAt: time.Now().UTC(),
+		}},
+	})
+	var merge struct {
+		Data struct {
+			SetFlowMerge struct {
+				Merge struct {
+					Status string `json:"status"`
+				} `json:"merge"`
+			} `json:"setFlowMerge"`
+		} `json:"data"`
+		Errors []any `json:"errors"`
+	}
+	postGraphQL(t, handler, `mutation($input: SetFlowMergeInput!) {
+		setFlowMerge(input: $input) { merge { status } }
+	}`, map[string]any{"input": map[string]any{"flowId": mergeRecord.FlowID, "status": "blocked"}}, &merge)
+	if len(merge.Errors) != 0 || merge.Data.SetFlowMerge.Merge.Status != flowstore.MergeBlocked {
+		t.Fatalf("merge response = %#v errors %#v", merge.Data.SetFlowMerge, merge.Errors)
+	}
+
+	var deleted struct {
+		Data struct {
+			DeleteFlow struct {
+				DeletedID string `json:"deletedId"`
+			} `json:"deleteFlow"`
+		} `json:"data"`
+		Errors []any `json:"errors"`
+	}
+	postGraphQL(t, handler, `mutation($id: ID!) { deleteFlow(id: $id) { deletedId } }`, map[string]any{"id": record.FlowID}, &deleted)
+	if len(deleted.Errors) != 0 || deleted.Data.DeleteFlow.DeletedID != record.FlowID {
+		t.Fatalf("delete response = %#v errors %#v", deleted.Data.DeleteFlow, deleted.Errors)
+	}
+	if _, err := store.Read(record.FlowID); !flowstore.IsNotFound(err) {
+		t.Fatalf("Read after delete error = %v, want not found", err)
+	}
+}
+
+func TestHandlerGraphQLNewMutationsFailReadOnlyFlowReader(t *testing.T) {
+	store, _ := newFlowGraphQLStore(t)
+	record := createGraphQLFlow(t, store, flowstore.FlowRecord{
+		FlowID:       "readonly-new-flow",
+		Title:        "Read-only New Flow",
+		Instructions: "readonly new mutation instructions",
+		RepoPath:     t.TempDir(),
+	})
+	handler := newFlowGraphQLHandlerWithOptions(t, server.HandlerOptions{FlowReader: store})
+	for _, tt := range []struct {
+		name      string
+		query     string
+		variables map[string]any
+	}{
+		{name: "startFlow", query: `mutation($input: StartFlowInput!) { startFlow(input: $input) { flow { id } } }`, variables: map[string]any{"input": map[string]any{
+			"repoPath": t.TempDir(), "title": "New", "instructions": "New", "launchPlan": false,
+		}}},
+		{name: "restartFlowPhase", query: `mutation($input: RestartFlowPhaseInput!) { restartFlowPhase(input: $input) { phase { phaseId } } }`, variables: map[string]any{"input": map[string]any{
+			"flowId": record.FlowID, "phaseId": "plan", "notes": "rerun",
+		}}},
+		{name: "addFlowChildPhase", query: `mutation($input: AddFlowChildPhaseInput!) { addFlowChildPhase(input: $input) { phase { phaseId } } }`, variables: map[string]any{"input": map[string]any{
+			"flowId": record.FlowID, "parentPhaseId": "implementation", "phaseId": "child", "title": "Child", "order": 1,
+		}}},
+		{name: "setFlowPlanLink", query: `mutation($input: SetFlowPlanLinkInput!) { setFlowPlanLink(input: $input) { flow { id } } }`, variables: map[string]any{"input": map[string]any{
+			"flowId": record.FlowID, "planId": "plan", "planPath": "/tmp/plan.md",
+		}}},
+		{name: "setFlowPR", query: `mutation($input: SetFlowPRInput!) { setFlowPR(input: $input) { pr { number } } }`, variables: map[string]any{"input": map[string]any{
+			"flowId": record.FlowID, "provider": "github", "number": 1, "url": "https://github.com/a/b/pull/1", "headBranch": "h", "baseBranch": "main",
+		}}},
+		{name: "setFlowMerge", query: `mutation($input: SetFlowMergeInput!) { setFlowMerge(input: $input) { merge { status } } }`, variables: map[string]any{"input": map[string]any{
+			"flowId": record.FlowID, "status": "blocked",
+		}}},
+		{name: "setFlowAutoMode", query: `mutation($input: SetFlowAutoModeInput!) { setFlowAutoMode(input: $input) { flow { id } } }`, variables: map[string]any{"input": map[string]any{
+			"flowId": record.FlowID, "enabled": false,
+		}}},
+		{name: "deleteFlow", query: `mutation($id: ID!) { deleteFlow(id: $id) { deletedId } }`, variables: map[string]any{"id": record.FlowID}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var out struct {
+				Data   any   `json:"data"`
+				Errors []any `json:"errors"`
+			}
+			postGraphQL(t, handler, tt.query, tt.variables, &out)
+			if !graphQLErrorsContain(out.Errors, "flow store is read-only") {
+				t.Fatalf("GraphQL errors = %#v, want read-only store error", out.Errors)
+			}
+		})
+	}
+}
+
+func TestHandlerGraphQLStartFlowCreateOnlyUsesConfiguredCreator(t *testing.T) {
+	creator := &staticFlowCreator{record: flowstore.FlowRecord{
+		FlowID:       "started-flow",
+		Title:        "Started Flow",
+		Instructions: "started instructions",
+		RepoPath:     "/dev/repo",
+		Phases:       []flowstore.FlowPhase{{PhaseID: "plan", Title: "Plan", Status: flowstore.PhaseReady}},
+	}}
+	handler := newFlowGraphQLHandlerWithOptions(t, server.HandlerOptions{FlowCreator: creator})
+	var out struct {
+		Data struct {
+			StartFlow struct {
+				Flow struct {
+					ID string `json:"id"`
+				} `json:"flow"`
+				LaunchError string `json:"launchError"`
+			} `json:"startFlow"`
+		} `json:"data"`
+		Errors []any `json:"errors"`
+	}
+	postGraphQL(t, handler, `mutation($input: StartFlowInput!) {
+		startFlow(input: $input) { flow { id } launchError }
+	}`, map[string]any{"input": map[string]any{
+		"repoPath":     "/dev/repo",
+		"title":        "Started Flow",
+		"instructions": "started instructions",
+		"baseRef":      "main",
+		"launchPlan":   false,
+	}}, &out)
+	if len(out.Errors) != 0 || out.Data.StartFlow.Flow.ID != "started-flow" || out.Data.StartFlow.LaunchError != "" {
+		t.Fatalf("startFlow response = %#v errors %#v", out.Data.StartFlow, out.Errors)
+	}
+	if !creator.called || creator.input.BaseRef != "main" || creator.input.RepoPath != "/dev/repo" {
+		t.Fatalf("creator input = %#v called=%v", creator.input, creator.called)
 	}
 }
 
@@ -476,6 +959,103 @@ func TestHandlerGraphQLCreateFlowAndLaunchPlanRejectsInvalidAgentBeforeCreate(t 
 	}
 }
 
+func TestHandlerGraphQLStartFlowLaunchPlanValidatesBeforeCreate(t *testing.T) {
+	tests := []struct {
+		name         string
+		defaultAgent string
+		input        map[string]any
+		options      func(*capturingRuntimeProvider) server.HandlerOptions
+		wantError    string
+	}{
+		{
+			name: "missing store",
+			options: func(runtime *capturingRuntimeProvider) server.HandlerOptions {
+				return server.HandlerOptions{
+					RuntimeJobs:    runtime,
+					RuntimeStarter: runtime,
+					AgentCommand:   "codex",
+				}
+			},
+			wantError: "flow store is not configured",
+		},
+		{
+			name: "missing runtime starter",
+			options: func(runtime *capturingRuntimeProvider) server.HandlerOptions {
+				store, _ := newFlowGraphQLStore(t)
+				return server.HandlerOptions{
+					FlowStore:    store,
+					RuntimeJobs:  runtime,
+					AgentCommand: "codex",
+				}
+			},
+			wantError: "runtime job starter is not configured",
+		},
+		{
+			name:         "invalid command",
+			defaultAgent: "codex",
+			input:        map[string]any{"agentCommand": "vim"},
+			wantError:    `unsupported agent "vim"`,
+		},
+		{
+			name:      "missing command",
+			input:     map[string]any{},
+			wantError: "agent command is required",
+		},
+		{
+			name:         "invalid reasoning effort",
+			defaultAgent: "codex",
+			input:        map[string]any{"reasoningEffort": "turbo"},
+			wantError:    `unsupported reasoning effort "turbo" for codex`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			creator := &staticFlowCreator{record: flowstore.FlowRecord{FlowID: "should-not-create"}}
+			runtime := &capturingRuntimeProvider{}
+			opts := server.HandlerOptions{}
+			if tt.options != nil {
+				opts = tt.options(runtime)
+			} else {
+				store, _ := newFlowGraphQLStore(t)
+				opts = server.HandlerOptions{
+					FlowStore:      store,
+					RuntimeJobs:    runtime,
+					RuntimeStarter: runtime,
+					AgentCommand:   tt.defaultAgent,
+				}
+			}
+			opts.FlowCreator = creator
+			handler := newFlowGraphQLHandlerWithOptions(t, opts)
+
+			input := map[string]any{
+				"repoPath":     t.TempDir(),
+				"title":        "Invalid Start",
+				"instructions": "do not create",
+				"launchPlan":   true,
+			}
+			for key, value := range tt.input {
+				input[key] = value
+			}
+			var out struct {
+				Data   any   `json:"data"`
+				Errors []any `json:"errors"`
+			}
+			postGraphQL(t, handler, `mutation($input: StartFlowInput!) {
+				startFlow(input: $input) { launchId }
+			}`, map[string]any{"input": input}, &out)
+			if !graphQLErrorsContain(out.Errors, tt.wantError) {
+				t.Fatalf("GraphQL errors = %#v, want %q", out.Errors, tt.wantError)
+			}
+			if creator.called {
+				t.Fatal("flow creator was called for invalid launch settings")
+			}
+			if len(runtime.requests) != 0 {
+				t.Fatalf("runtime requests = %#v, want none", runtime.requests)
+			}
+		})
+	}
+}
+
 func TestHandlerGraphQLCreateFlowAndLaunchPlanReturnsBlockedFlowWithoutRuntimeJob(t *testing.T) {
 	store, _ := newFlowGraphQLStore(t)
 	runtime := &capturingRuntimeProvider{}
@@ -751,6 +1331,198 @@ func TestHandlerGraphQLSetFlowPhaseStatusCompletesPhaseAndReturnsUpdatedFlow(t *
 	review := graphQLPhaseByID(t, read, "plan-review")
 	if plan.Status != flowstore.PhaseCompleted || plan.Summary != "Plan saved." || review.Status != flowstore.PhaseReady {
 		t.Fatalf("persisted phases = plan %#v review %#v, want completed plan and ready review", plan, review)
+	}
+}
+
+func TestHandlerGraphQLIdempotencyReplaysMutationResponse(t *testing.T) {
+	store, _ := newFlowGraphQLStore(t)
+	record := createGraphQLFlow(t, store, flowstore.FlowRecord{
+		FlowID:       "idempotent-flow",
+		Title:        "Idempotent Flow",
+		Instructions: "idempotent instructions",
+		RepoPath:     t.TempDir(),
+	})
+	spy := &setPhaseCountingStore{Store: store}
+	handler := newFlowGraphQLHandler(t, spy)
+	variables := map[string]any{"input": map[string]any{
+		"flowId":  record.FlowID,
+		"phaseId": "plan",
+		"status":  "COMPLETED",
+	}}
+
+	first := postGraphQLRaw(t, handler, setFlowPhaseStatusMutation, variables, map[string]string{"Idempotency-Key": "same-key"}, http.StatusOK)
+	second := postGraphQLRaw(t, handler, setFlowPhaseStatusMutation, variables, map[string]string{"Idempotency-Key": "same-key"}, http.StatusOK)
+
+	if first != second {
+		t.Fatalf("replayed body differs\nfirst:  %s\nsecond: %s", first, second)
+	}
+	if got := spy.SetPhaseCalls(); got != 1 {
+		t.Fatalf("SetPhase calls = %d, want 1", got)
+	}
+}
+
+func TestHandlerGraphQLIdempotencyReplaysCommentedMutationResponse(t *testing.T) {
+	store, _ := newFlowGraphQLStore(t)
+	record := createGraphQLFlow(t, store, flowstore.FlowRecord{
+		FlowID:       "idempotent-commented-flow",
+		Title:        "Idempotent Commented Flow",
+		Instructions: "idempotent commented instructions",
+		RepoPath:     t.TempDir(),
+	})
+	spy := &setPhaseCountingStore{Store: store}
+	handler := newFlowGraphQLHandler(t, spy)
+	variables := map[string]any{"input": map[string]any{
+		"flowId":  record.FlowID,
+		"phaseId": "plan",
+		"status":  "COMPLETED",
+	}}
+	query := "# generated client retry-safe operation\n" + setFlowPhaseStatusMutation
+
+	first := postGraphQLRaw(t, handler, query, variables, map[string]string{"Idempotency-Key": "same-key"}, http.StatusOK)
+	second := postGraphQLRaw(t, handler, query, variables, map[string]string{"Idempotency-Key": "same-key"}, http.StatusOK)
+
+	if first != second {
+		t.Fatalf("replayed body differs\nfirst:  %s\nsecond: %s", first, second)
+	}
+	if got := spy.SetPhaseCalls(); got != 1 {
+		t.Fatalf("SetPhase calls = %d, want 1", got)
+	}
+}
+
+func TestHandlerGraphQLIdempotencyReplaysMutationErrors(t *testing.T) {
+	store, _ := newFlowGraphQLStore(t)
+	record := createGraphQLFlow(t, store, flowstore.FlowRecord{
+		FlowID:       "idempotent-error-flow",
+		Title:        "Idempotent Error Flow",
+		Instructions: "idempotent error instructions",
+		RepoPath:     t.TempDir(),
+	})
+	spy := &setPhaseCountingStore{Store: store}
+	handler := newFlowGraphQLHandler(t, spy)
+	variables := map[string]any{"input": map[string]any{
+		"flowId":  record.FlowID,
+		"phaseId": "missing-phase",
+		"status":  "COMPLETED",
+	}}
+
+	first := postGraphQLRaw(t, handler, setFlowPhaseStatusMutation, variables, map[string]string{"Idempotency-Key": "same-key"}, http.StatusOK)
+	second := postGraphQLRaw(t, handler, setFlowPhaseStatusMutation, variables, map[string]string{"Idempotency-Key": "same-key"}, http.StatusOK)
+
+	if first != second {
+		t.Fatalf("replayed error body differs\nfirst:  %s\nsecond: %s", first, second)
+	}
+	if !strings.Contains(first, "missing-phase") {
+		t.Fatalf("error body = %s, want missing phase error", first)
+	}
+	if got := spy.SetPhaseCalls(); got != 1 {
+		t.Fatalf("SetPhase calls = %d, want 1", got)
+	}
+}
+
+func TestHandlerGraphQLIdempotencyDoesNotReplayMissingOrDifferentKeys(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		headers []map[string]string
+	}{
+		{name: "missing keys", headers: []map[string]string{{}, {}}},
+		{name: "different keys", headers: []map[string]string{{"Idempotency-Key": "key-1"}, {"Idempotency-Key": "key-2"}}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			store, _ := newFlowGraphQLStore(t)
+			record := createGraphQLFlow(t, store, flowstore.FlowRecord{
+				FlowID:       "idempotent-flow",
+				Title:        "Idempotent Flow",
+				Instructions: "idempotent instructions",
+				RepoPath:     t.TempDir(),
+			})
+			spy := &setPhaseCountingStore{Store: store}
+			handler := newFlowGraphQLHandler(t, spy)
+			variables := map[string]any{"input": map[string]any{
+				"flowId":  record.FlowID,
+				"phaseId": "plan",
+				"status":  "COMPLETED",
+			}}
+
+			postGraphQLRaw(t, handler, setFlowPhaseStatusMutation, variables, tt.headers[0], http.StatusOK)
+			postGraphQLRaw(t, handler, setFlowPhaseStatusMutation, variables, tt.headers[1], http.StatusOK)
+
+			if got := spy.SetPhaseCalls(); got != 2 {
+				t.Fatalf("SetPhase calls = %d, want 2", got)
+			}
+		})
+	}
+}
+
+func TestHandlerGraphQLIdempotencyKeyBodyMismatchConflicts(t *testing.T) {
+	store, _ := newFlowGraphQLStore(t)
+	record := createGraphQLFlow(t, store, flowstore.FlowRecord{
+		FlowID:       "idempotent-flow",
+		Title:        "Idempotent Flow",
+		Instructions: "idempotent instructions",
+		RepoPath:     t.TempDir(),
+	})
+	spy := &setPhaseCountingStore{Store: store}
+	handler := newFlowGraphQLHandler(t, spy)
+
+	postGraphQLRaw(t, handler, setFlowPhaseStatusMutation, map[string]any{"input": map[string]any{
+		"flowId":  record.FlowID,
+		"phaseId": "plan",
+		"status":  "COMPLETED",
+	}}, map[string]string{"Idempotency-Key": "same-key"}, http.StatusOK)
+	conflict := postGraphQLRaw(t, handler, setFlowPhaseStatusMutation, map[string]any{"input": map[string]any{
+		"flowId":  record.FlowID,
+		"phaseId": "plan",
+		"status":  "BLOCKED",
+		"notes":   "different body",
+	}}, map[string]string{"Idempotency-Key": "same-key"}, http.StatusConflict)
+
+	if !strings.Contains(conflict, "idempotency key conflict") {
+		t.Fatalf("conflict body = %s, want idempotency key conflict", conflict)
+	}
+	if got := spy.SetPhaseCalls(); got != 1 {
+		t.Fatalf("SetPhase calls = %d, want 1", got)
+	}
+}
+
+func TestHandlerGraphQLIdempotencyConcurrentDuplicateInvokesStoreOnce(t *testing.T) {
+	store, _ := newFlowGraphQLStore(t)
+	record := createGraphQLFlow(t, store, flowstore.FlowRecord{
+		FlowID:       "idempotent-flow",
+		Title:        "Idempotent Flow",
+		Instructions: "idempotent instructions",
+		RepoPath:     t.TempDir(),
+	})
+	spy := &setPhaseCountingStore{
+		Store:   store,
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	handler := newFlowGraphQLHandler(t, spy)
+	variables := map[string]any{"input": map[string]any{
+		"flowId":  record.FlowID,
+		"phaseId": "plan",
+		"status":  "COMPLETED",
+	}}
+	headers := map[string]string{"Idempotency-Key": "same-key"}
+	first := make(chan string, 1)
+	second := make(chan string, 1)
+
+	go func() {
+		first <- postGraphQLRaw(t, handler, setFlowPhaseStatusMutation, variables, headers, http.StatusOK)
+	}()
+	<-spy.started
+	go func() {
+		second <- postGraphQLRaw(t, handler, setFlowPhaseStatusMutation, variables, headers, http.StatusOK)
+	}()
+	close(spy.release)
+
+	firstBody := <-first
+	secondBody := <-second
+	if firstBody != secondBody {
+		t.Fatalf("concurrent replay body differs\nfirst:  %s\nsecond: %s", firstBody, secondBody)
+	}
+	if got := spy.SetPhaseCalls(); got != 1 {
+		t.Fatalf("SetPhase calls = %d, want 1", got)
 	}
 }
 
@@ -2228,6 +3000,57 @@ func postGraphQLWithStatus(t *testing.T, handler http.Handler, wantStatus int, q
 	if err := json.Unmarshal(res.Body.Bytes(), out); err != nil {
 		t.Fatalf("decode GraphQL response: %v\n%s", err, res.Body.String())
 	}
+}
+
+func postGraphQLRaw(t *testing.T, handler http.Handler, query string, variables map[string]any, headers map[string]string, wantStatus int) string {
+	t.Helper()
+	body, err := json.Marshal(map[string]any{"query": query, "variables": variables})
+	if err != nil {
+		t.Fatalf("marshal GraphQL request: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:4321/graphql", bytes.NewReader(body))
+	req.Host = "127.0.0.1:4321"
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer test-token")
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if res.Code != wantStatus {
+		t.Fatalf("GraphQL status = %d, want %d; body:\n%s", res.Code, wantStatus, res.Body.String())
+	}
+	return res.Body.String()
+}
+
+type setPhaseCountingStore struct {
+	*flowstore.Store
+	mu      sync.Mutex
+	calls   int
+	started chan struct{}
+	release chan struct{}
+}
+
+func (s *setPhaseCountingStore) SetPhase(update flowstore.PhaseUpdate) (flowstore.FlowRecord, error) {
+	s.mu.Lock()
+	s.calls++
+	started := s.started
+	release := s.release
+	if started != nil {
+		s.started = nil
+	}
+	s.mu.Unlock()
+	if started != nil {
+		close(started)
+		<-release
+	}
+	return s.Store.SetPhase(update)
+}
+
+func (s *setPhaseCountingStore) SetPhaseCalls() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.calls
 }
 
 func mutateFlowMeta(t *testing.T, root, flowID string, mutate func(map[string]any)) {
