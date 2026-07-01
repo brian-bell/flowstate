@@ -727,6 +727,17 @@ func TestRuntimeArtifactRootDefaultsWhenConfigRootEmpty(t *testing.T) {
 	}
 }
 
+func TestFlowClientForTUIToleratesMissingDaemonCoords(t *testing.T) {
+	t.Setenv("FLOWSTATE_DAEMON_URL", "")
+	t.Setenv("FLOWSTATE_DAEMON_TOKEN", "")
+	client := flowClientForTUI(t.TempDir())
+
+	_, err := client.ListFlows(context.Background(), flowstore.FlowFilter{})
+	if err == nil || !strings.Contains(err.Error(), "flow daemon client is not available") {
+		t.Fatalf("ListFlows error = %v, want daemon unavailable error", err)
+	}
+}
+
 func TestModelOptionsFromConfigPassesReasoningEffort(t *testing.T) {
 	sessionStore, planStore, flowStore := testArtifactStores(t)
 

@@ -406,19 +406,107 @@ func startProgram(repos []scanner.Repo, opts startProgramOptions) error {
 	if err != nil {
 		return err
 	}
+	flowClient := flowClientForTUI(artifactRoot)
+	modelOpts := modelOptionsFromConfig(cfg, opts.ScanRepos, sessionStore, planStore, flowClient)
+	modelOpts.RepoCreateRoot = opts.RepoCreateRoot
+	p := tea.NewProgram(model.NewWithOptions(repos, modelOpts), tea.WithAltScreen())
+	_, err = p.Run()
+	return err
+}
+
+func flowClientForTUI(artifactRoot string) daemonclient.FlowClient {
 	flowClient, err := daemonclient.New(daemonclient.Options{
 		Coords: func() (daemoncoords.Coords, error) {
 			return daemoncoords.ReadForStateRoot(artifactRoot)
 		},
 	})
 	if err != nil {
-		return err
+		return unavailableFlowClient{cause: err}
 	}
-	modelOpts := modelOptionsFromConfig(cfg, opts.ScanRepos, sessionStore, planStore, flowClient)
-	modelOpts.RepoCreateRoot = opts.RepoCreateRoot
-	p := tea.NewProgram(model.NewWithOptions(repos, modelOpts), tea.WithAltScreen())
-	_, err = p.Run()
-	return err
+	return flowClient
+}
+
+type unavailableFlowClient struct {
+	cause error
+}
+
+func (c unavailableFlowClient) err() error {
+	if c.cause == nil {
+		return fmt.Errorf("flow daemon client is not configured")
+	}
+	return fmt.Errorf("flow daemon client is not available: %w", c.cause)
+}
+
+func (c unavailableFlowClient) ListFlows(context.Context, flowstore.FlowFilter) ([]flowstore.FlowRecord, error) {
+	return nil, c.err()
+}
+
+func (c unavailableFlowClient) ReadFlow(context.Context, string) (flowstore.FlowRecord, error) {
+	return flowstore.FlowRecord{}, c.err()
+}
+
+func (c unavailableFlowClient) ListFlowViews(context.Context, flowstore.FlowFilter) ([]daemonclient.FlowView, error) {
+	return nil, c.err()
+}
+
+func (c unavailableFlowClient) ReadFlowView(context.Context, string) (daemonclient.FlowView, error) {
+	return daemonclient.FlowView{}, c.err()
+}
+
+func (c unavailableFlowClient) CreateRawFlow(context.Context, flowstore.FlowRecord) (flowstore.FlowRecord, error) {
+	return flowstore.FlowRecord{}, c.err()
+}
+
+func (c unavailableFlowClient) SetPhase(context.Context, flowstore.PhaseUpdate) (flowstore.FlowRecord, flowstore.FlowPhase, error) {
+	return flowstore.FlowRecord{}, flowstore.FlowPhase{}, c.err()
+}
+
+func (c unavailableFlowClient) ResetFlowPhase(context.Context, flowstore.PhaseResetUpdate) (flowstore.FlowRecord, flowstore.FlowPhase, error) {
+	return flowstore.FlowRecord{}, flowstore.FlowPhase{}, c.err()
+}
+
+func (c unavailableFlowClient) RestartFlowPhase(context.Context, flowstore.PhaseRestartUpdate) (flowstore.FlowRecord, flowstore.FlowPhase, error) {
+	return flowstore.FlowRecord{}, flowstore.FlowPhase{}, c.err()
+}
+
+func (c unavailableFlowClient) AddFlowChildPhase(context.Context, flowstore.ChildPhaseUpdate) (flowstore.FlowRecord, flowstore.FlowPhase, error) {
+	return flowstore.FlowRecord{}, flowstore.FlowPhase{}, c.err()
+}
+
+func (c unavailableFlowClient) SetFlowPlanLink(context.Context, flowstore.PlanLinkUpdate) (flowstore.FlowRecord, error) {
+	return flowstore.FlowRecord{}, c.err()
+}
+
+func (c unavailableFlowClient) SetFlowPR(context.Context, flowstore.PRUpdate) (flowstore.FlowRecord, flowstore.PullRequest, error) {
+	return flowstore.FlowRecord{}, flowstore.PullRequest{}, c.err()
+}
+
+func (c unavailableFlowClient) SetFlowMerge(context.Context, flowstore.MergeUpdate) (flowstore.FlowRecord, flowstore.Merge, error) {
+	return flowstore.FlowRecord{}, flowstore.Merge{}, c.err()
+}
+
+func (c unavailableFlowClient) SetFlowAutoMode(context.Context, flowstore.AutoModeUpdate) (flowstore.FlowRecord, error) {
+	return flowstore.FlowRecord{}, c.err()
+}
+
+func (c unavailableFlowClient) DeleteFlow(context.Context, string) (string, error) {
+	return "", c.err()
+}
+
+func (c unavailableFlowClient) AddFlowPhaseLaunchID(context.Context, flowstore.PhaseLaunchUpdate) (flowstore.FlowRecord, flowstore.FlowPhase, error) {
+	return flowstore.FlowRecord{}, flowstore.FlowPhase{}, c.err()
+}
+
+func (c unavailableFlowClient) StartFlow(context.Context, daemonclient.StartFlowInput) (daemonclient.StartFlowResult, error) {
+	return daemonclient.StartFlowResult{}, c.err()
+}
+
+func (c unavailableFlowClient) LaunchFlowPhase(context.Context, daemonclient.LaunchFlowPhaseInput) (daemonclient.LaunchFlowPhaseResult, error) {
+	return daemonclient.LaunchFlowPhaseResult{}, c.err()
+}
+
+func (c unavailableFlowClient) CancelRuntimeJob(context.Context, string) (daemonclient.RuntimeJob, error) {
+	return daemonclient.RuntimeJob{}, c.err()
 }
 
 func modelOptionsFromConfig(cfg config.Config, scanRepos func() ([]scanner.Repo, error), sessionStore *sessions.Store, planStore *planstore.Store, flowClient daemonclient.FlowClient) model.Options {
