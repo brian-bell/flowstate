@@ -1248,17 +1248,109 @@ func TestModelOptionsStartFlowPlanCreatesOnlyForCodexApp(t *testing.T) {
 	}
 }
 
+func TestModelOptionsStartFlowPlanForcesHeadlessDaemonRuntime(t *testing.T) {
+	sessionStore, planStore, _ := testArtifactStores(t)
+	client := &capturingStartFlowClient{
+		result: daemonclient.StartFlowResult{Flow: flowstore.FlowRecord{
+			FlowID:   "flow-1",
+			RepoPath: "/dev/alpha",
+			Phases:   []flowstore.FlowPhase{{PhaseID: "plan", Status: flowstore.PhaseBlocked}},
+		}},
+	}
+	opts := modelOptionsFromConfig(config.Config{Agent: config.AgentConfig{Command: "codex"}}, nil, sessionStore, planStore, client)
+
+	result, err := opts.StartFlowPlan(model.FlowStartRequest{
+		RepoPath:     "/dev/alpha",
+		Title:        "Headless Flow",
+		Instructions: "Write the plan",
+		AgentCommand: "codex",
+		Headless:     false,
+		PlanPhaseID:  "plan",
+	})
+	if err != nil {
+		t.Fatalf("StartFlowPlan: %v", err)
+	}
+	if !client.input.Headless {
+		t.Fatalf("StartFlow input = %#v, want headless daemon runtime", client.input)
+	}
+	if !result.DaemonLaunched || result.LaunchContext != (actions.AgentLaunchContext{}) {
+		t.Fatalf("result = %#v, want daemon-handled no-launch response", result)
+	}
+}
+
+func TestModelOptionsStartFlowPlanReturnsDaemonLaunchError(t *testing.T) {
+	sessionStore, planStore, _ := testArtifactStores(t)
+	client := &capturingStartFlowClient{
+		result: daemonclient.StartFlowResult{
+			Flow:        flowstore.FlowRecord{FlowID: "flow-1", RepoPath: "/dev/alpha"},
+			LaunchID:    "launch-1",
+			LaunchError: "runtime unavailable",
+		},
+	}
+	opts := modelOptionsFromConfig(config.Config{Agent: config.AgentConfig{Command: "codex"}}, nil, sessionStore, planStore, client)
+
+	result, err := opts.StartFlowPlan(model.FlowStartRequest{
+		RepoPath:     "/dev/alpha",
+		Title:        "Launch Error Flow",
+		Instructions: "Write the plan",
+		AgentCommand: "codex",
+		Headless:     true,
+		PlanPhaseID:  "plan",
+	})
+	if err == nil || !strings.Contains(err.Error(), "runtime unavailable") {
+		t.Fatalf("StartFlowPlan error = %v, want daemon launch error", err)
+	}
+	if result.Flow.FlowID != "flow-1" || result.LaunchID != "launch-1" || !result.DaemonLaunched {
+		t.Fatalf("result = %#v, want flow metadata preserved with daemon handled flag", result)
+	}
+}
+
+func TestModelOptionsLaunchFlowPhaseForcesHeadlessDaemonRuntime(t *testing.T) {
+	sessionStore, planStore, _ := testArtifactStores(t)
+	client := &capturingStartFlowClient{
+		launchResult: daemonclient.LaunchFlowPhaseResult{
+			FlowID:   "flow-1",
+			PhaseID:  "implementation",
+			LaunchID: "launch-1",
+		},
+	}
+	opts := modelOptionsFromConfig(config.Config{Agent: config.AgentConfig{Command: "codex"}}, nil, sessionStore, planStore, client)
+
+	result, err := opts.LaunchFlowPhase(model.DaemonFlowPhaseLaunchRequest{
+		FlowID:     "flow-1",
+		PhaseID:    "implementation",
+		Headless:   false,
+		AutoLaunch: true,
+	})
+	if err != nil {
+		t.Fatalf("LaunchFlowPhase: %v", err)
+	}
+	if !client.launchInput.Headless || !client.launchInput.AutoLaunch {
+		t.Fatalf("launch input = %#v, want forced headless preserving auto-launch", client.launchInput)
+	}
+	if result.LaunchID != "launch-1" {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
 type capturingStartFlowClient struct {
 	daemonclient.FlowClient
-	called bool
-	input  daemonclient.StartFlowInput
-	result daemonclient.StartFlowResult
+	called       bool
+	input        daemonclient.StartFlowInput
+	result       daemonclient.StartFlowResult
+	launchInput  daemonclient.LaunchFlowPhaseInput
+	launchResult daemonclient.LaunchFlowPhaseResult
 }
 
 func (c *capturingStartFlowClient) StartFlow(_ context.Context, input daemonclient.StartFlowInput) (daemonclient.StartFlowResult, error) {
 	c.called = true
 	c.input = input
 	return c.result, nil
+}
+
+func (c *capturingStartFlowClient) LaunchFlowPhase(_ context.Context, input daemonclient.LaunchFlowPhaseInput) (daemonclient.LaunchFlowPhaseResult, error) {
+	c.launchInput = input
+	return c.launchResult, nil
 }
 
 func singleSessionFile(t *testing.T, root, provider, name string) string {

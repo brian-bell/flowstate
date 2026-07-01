@@ -522,17 +522,20 @@ func modelOptionsFromConfig(cfg config.Config, scanRepos func() ([]scanner.Repo,
 				Instructions:    req.Instructions,
 				BaseRef:         req.BaseRef,
 				LaunchPlan:      true,
-				Headless:        req.Headless,
+				Headless:        true,
 				AgentCommand:    req.AgentCommand,
 				ReasoningEffort: req.ReasoningEffort,
 			})
 			if err != nil {
 				return model.FlowStartResult{}, err
 			}
+			if result.LaunchError != "" {
+				return model.FlowStartResult{Flow: result.Flow, LaunchID: result.LaunchID, DaemonLaunched: true}, fmt.Errorf("daemon launch failed: %s", result.LaunchError)
+			}
 			return model.FlowStartResult{
 				Flow:           result.Flow,
 				LaunchID:       result.LaunchID,
-				DaemonLaunched: result.LaunchID != "" || result.Job != nil || result.LaunchError != "",
+				DaemonLaunched: true,
 			}, nil
 		},
 		LaunchFlowPhase: func(req model.DaemonFlowPhaseLaunchRequest) (model.DaemonFlowPhaseLaunchResult, error) {
@@ -541,7 +544,7 @@ func modelOptionsFromConfig(cfg config.Config, scanRepos func() ([]scanner.Repo,
 				PhaseID:         req.PhaseID,
 				AgentCommand:    req.AgentCommand,
 				ReasoningEffort: req.ReasoningEffort,
-				Headless:        req.Headless,
+				Headless:        true,
 				AutoLaunch:      req.AutoLaunch,
 			})
 			if err != nil {
