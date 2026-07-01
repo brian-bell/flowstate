@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/brian-bell/flowstate/config"
+	"github.com/brian-bell/flowstate/internal/daemonclient"
 	"github.com/brian-bell/flowstate/planstore"
 	"github.com/brian-bell/flowstate/scanner"
 )
@@ -29,6 +30,11 @@ func noScanDeps(t *testing.T, deps runDeps) runDeps {
 	}
 	if deps.getenv == nil {
 		deps.getenv = func(string) string { return "" }
+	}
+	if deps.newFlowClient == nil {
+		deps.newFlowClient = func(stateRoot string) (daemonclient.FlowClient, error) {
+			return newTestFlowClient(t, stateRoot, deps)
+		}
 	}
 	return deps
 }

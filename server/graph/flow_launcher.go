@@ -16,6 +16,7 @@ import (
 type flowRuntimeLaunch struct {
 	Context  actions.AgentLaunchContext
 	Snapshot runtimejobs.Snapshot
+	Skipped  bool
 }
 
 type flowRuntimeStartError struct {
@@ -58,12 +59,16 @@ func (r *mutationResolver) newFlowLauncher(record flowstore.FlowRecord, command,
 	}
 }
 
-func (r *mutationResolver) startFlowRuntimeJob(ctx context.Context, record flowstore.FlowRecord, phase flowstore.FlowPhase, command, reasoningEffort string) (flowRuntimeLaunch, error) {
+func (r *mutationResolver) startFlowRuntimeJob(ctx context.Context, record flowstore.FlowRecord, phase flowstore.FlowPhase, command, reasoningEffort string, headless, autoLaunch bool) (flowRuntimeLaunch, error) {
+	if !headless {
+		return flowRuntimeLaunch{}, fmt.Errorf("daemon runtime launches require headless mode")
+	}
 	launcher := r.newFlowLauncher(record, command, reasoningEffort)
 	prepared, err := launcher.Preflight(flowlaunch.Request{
 		Record:        record,
 		Phase:         phase,
-		Headless:      true,
+		Headless:      headless,
+		AutoLaunch:    autoLaunch,
 		RejectRunning: true,
 	})
 	if err != nil {
@@ -73,9 +78,12 @@ func (r *mutationResolver) startFlowRuntimeJob(ctx context.Context, record flows
 	if err != nil {
 		return flowRuntimeLaunch{}, err
 	}
+	if result.Skipped {
+		return flowRuntimeLaunch{Skipped: true}, nil
+	}
 	launchContext := result.Context
 	launchContext.Embedded = false
-	launchContext.Headless = true
+	launchContext.Headless = headless
 	launchContext.FlowLaunchTracked = true
 	snapshot, err := r.RuntimeStarter.Start(ctx, runtimejobs.StartRequest{
 		FlowID:   record.FlowID,

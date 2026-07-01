@@ -17,6 +17,7 @@ import (
 	"github.com/brian-bell/flowstate/internal/daemoncoords"
 	"github.com/brian-bell/flowstate/planstore"
 	"github.com/brian-bell/flowstate/server"
+	"github.com/brian-bell/flowstate/server/flowquery"
 )
 
 func TestClientListFlowsMapsPersistedRecordsAndRepoFilter(t *testing.T) {
@@ -80,6 +81,16 @@ func TestClientListFlowsMapsPersistedRecordsAndRepoFilter(t *testing.T) {
 	}
 }
 
+func TestNewDefaultHTTPClientDoesNotSetRequestTimeout(t *testing.T) {
+	client, err := New(Options{EndpointURL: "http://127.0.0.1:1", Token: "test-token"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if client.httpClient.Timeout != 0 {
+		t.Fatalf("default HTTP timeout = %s, want no blanket request timeout", client.httpClient.Timeout)
+	}
+}
+
 func TestClientReadFlowAndNotFound(t *testing.T) {
 	store, url := newClientGraphQLServer(t, "test-token")
 	created := createClientFlow(t, store, flowstore.FlowRecord{
@@ -103,6 +114,92 @@ func TestClientReadFlowAndNotFound(t *testing.T) {
 	_, err = client.ReadFlow(context.Background(), "missing-flow")
 	if !flowstore.IsNotFound(err) {
 		t.Fatalf("ReadFlow missing error = %v, want flowstore not found", err)
+	}
+}
+
+func TestClientCreateRawFlowPreservesMetadataWithoutWorktreeSideEffects(t *testing.T) {
+	store, url := newClientGraphQLServer(t, "test-token")
+	root := t.TempDir()
+	worktreePath := filepath.Join(root, "repo-worktrees", "flow-raw")
+	client, err := New(Options{EndpointURL: url, Token: "test-token"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	created, err := client.CreateRawFlow(context.Background(), flowstore.FlowRecord{
+		Title:        "Raw Flow",
+		Instructions: "persist only",
+		RepoPath:     filepath.Join(root, "repo"),
+		WorktreePath: worktreePath,
+		Branch:       "flow/raw",
+		BaseRef:      "main",
+		Commit:       "abc123",
+	})
+	if err != nil {
+		t.Fatalf("CreateRawFlow: %v", err)
+	}
+	if created.WorktreePath != worktreePath || created.Branch != "flow/raw" || created.BaseRef != "main" || created.Commit != "abc123" {
+		t.Fatalf("created metadata = %#v", created)
+	}
+	if _, err := os.Stat(worktreePath); !os.IsNotExist(err) {
+		t.Fatalf("worktree path stat error = %v, want not created", err)
+	}
+	read, err := store.Read(created.FlowID)
+	if err != nil {
+		t.Fatalf("store.Read: %v", err)
+	}
+	if read.WorktreePath != worktreePath || read.Branch != "flow/raw" {
+		t.Fatalf("persisted metadata = %#v", read)
+	}
+}
+
+func TestClientFlowViewsIncludeActiveRuntimeJobs(t *testing.T) {
+	root := t.TempDir()
+	store, err := flowstore.NewStore(flowstore.StoreOptions{Root: root})
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	flow := createClientFlow(t, store, flowstore.FlowRecord{
+		FlowID:       "runtime-flow",
+		Title:        "Runtime Flow",
+		Instructions: "show runtime",
+		RepoPath:     filepath.Join(root, "repo"),
+	})
+	now := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	runtime := staticRuntimeLookup{job: &flowquery.RuntimeJob{
+		ID:           "job-1",
+		LaunchID:     "launch-1",
+		FlowID:       flow.FlowID,
+		PhaseID:      "plan",
+		Status:       "running",
+		CreatedAt:    now,
+		StartedAt:    &now,
+		LogTail:      "hello from daemon\n",
+		LogTruncated: true,
+	}}
+	url := newClientGraphQLServerFromStore(t, root, store, "test-token", runtime)
+	client, err := New(Options{EndpointURL: url, Token: "test-token"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	views, err := client.ListFlowViews(context.Background(), flowstore.FlowFilter{})
+	if err != nil {
+		t.Fatalf("ListFlowViews: %v", err)
+	}
+	if len(views) != 1 {
+		t.Fatalf("views len = %d, want 1", len(views))
+	}
+	job, ok := views[0].RuntimeJobs["plan"]
+	if !ok || job.ID != "job-1" || job.LogTail != "hello from daemon\n" || !job.LogTruncated {
+		t.Fatalf("runtime job = %#v, ok=%v", job, ok)
+	}
+	records, err := client.ListFlows(context.Background(), flowstore.FlowFilter{})
+	if err != nil {
+		t.Fatalf("ListFlows: %v", err)
+	}
+	if len(records) != 1 || records[0].FlowID != flow.FlowID {
+		t.Fatalf("records = %#v", records)
 	}
 }
 
@@ -241,6 +338,76 @@ func TestClientMutationMethodsRoundTripThroughGraphQL(t *testing.T) {
 	}
 	if started.Flow.FlowID == "" || started.Flow.Title != "Started Flow" || started.LaunchError != "" {
 		t.Fatalf("StartFlow result = %#v", started)
+	}
+}
+
+func TestClientResetFlowPhaseRoundTripsThroughGraphQL(t *testing.T) {
+	store, url, _ := newClientGraphQLServerWithRoot(t, "test-token")
+	record := createClientFlow(t, store, flowstore.FlowRecord{
+		FlowID:       "reset-flow",
+		Title:        "Reset Flow",
+		Instructions: "reset instructions",
+		RepoPath:     t.TempDir(),
+	})
+	mustSetClientPhase(t, store, record.FlowID, "plan", flowstore.PhaseCompleted)
+	if _, err := store.SetPhase(flowstore.PhaseUpdate{
+		FlowID:  record.FlowID,
+		PhaseID: "plan-review",
+		Status:  flowstore.PhaseCompleted,
+		Outcome: flowstore.OutcomeApproved,
+	}); err != nil {
+		t.Fatalf("SetPhase plan-review completed: %v", err)
+	}
+	if _, err := store.AddPhaseLaunchID(flowstore.PhaseLaunchUpdate{
+		FlowID:   record.FlowID,
+		PhaseID:  "implementation",
+		LaunchID: "orphan-launch",
+	}); err != nil {
+		t.Fatalf("AddPhaseLaunchID: %v", err)
+	}
+	client, err := New(Options{EndpointURL: url, Token: "test-token"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	updated, phase, err := client.ResetFlowPhase(context.Background(), flowstore.PhaseResetUpdate{
+		FlowID:  record.FlowID,
+		PhaseID: "Implementation",
+	})
+	if err != nil {
+		t.Fatalf("ResetFlowPhase: %v", err)
+	}
+	if updated.FlowID != record.FlowID || phase.PhaseID != "implementation" || phase.Status != flowstore.PhaseReady || len(phase.LaunchIDs) != 0 {
+		t.Fatalf("reset result flow=%#v phase=%#v", updated, phase)
+	}
+}
+
+func TestClientAddFlowPhaseLaunchIDRecordsResume(t *testing.T) {
+	store, url, _ := newClientGraphQLServerWithRoot(t, "test-token")
+	record := createClientFlow(t, store, flowstore.FlowRecord{
+		FlowID:       "resume-flow",
+		Title:        "Resume Flow",
+		Instructions: "resume instructions",
+		RepoPath:     t.TempDir(),
+	})
+	mustSetClientPhase(t, store, record.FlowID, "plan", flowstore.PhaseCompleted)
+	client, err := New(Options{EndpointURL: url, Token: "test-token"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	updated, phase, err := client.AddFlowPhaseLaunchID(context.Background(), flowstore.PhaseLaunchUpdate{
+		FlowID:   record.FlowID,
+		PhaseID:  "Plan",
+		LaunchID: "resume-launch",
+		Resume:   true,
+	})
+	if err != nil {
+		t.Fatalf("AddFlowPhaseLaunchID: %v", err)
+	}
+	if updated.FlowID != record.FlowID || phase.PhaseID != "plan" || phase.Status != flowstore.PhaseCompleted ||
+		len(phase.LaunchIDs) != 1 || phase.LaunchIDs[0] != "resume-launch" {
+		t.Fatalf("add launch result flow=%#v phase=%#v", updated, phase)
 	}
 }
 
@@ -455,6 +622,46 @@ func newClientGraphQLServerWithRoot(t *testing.T, token string) (*flowstore.Stor
 	return store, srv.URL, root
 }
 
+func newClientGraphQLServerFromStore(t *testing.T, root string, store *flowstore.Store, token string, runtime flowquery.RuntimeJobLookup) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	port := strconv.Itoa(ln.Addr().(*net.TCPAddr).Port)
+	handler, err := server.NewHandler(server.HandlerOptions{
+		Token: token,
+		AllowedEndpoints: []server.AllowedEndpoint{{
+			Host: "127.0.0.1",
+			Port: port,
+		}},
+		FlowStore:   store,
+		RuntimeJobs: runtime,
+		StateRoot:   root,
+	})
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+	srv := httptest.NewUnstartedServer(handler)
+	srv.Listener = ln
+	srv.Start()
+	t.Cleanup(srv.Close)
+	return srv.URL
+}
+
+type staticRuntimeLookup struct {
+	job *flowquery.RuntimeJob
+}
+
+func (l staticRuntimeLookup) RuntimeStateKnown() bool { return true }
+
+func (l staticRuntimeLookup) ActiveRuntimeJob(record flowstore.FlowRecord, phase flowstore.FlowPhase) (*flowquery.RuntimeJob, error) {
+	if l.job == nil || record.FlowID != l.job.FlowID || phase.PhaseID != l.job.PhaseID {
+		return nil, nil
+	}
+	return l.job, nil
+}
+
 func createClientFlow(t *testing.T, store *flowstore.Store, record flowstore.FlowRecord) flowstore.FlowRecord {
 	t.Helper()
 	created, err := store.Create(record)
@@ -462,6 +669,19 @@ func createClientFlow(t *testing.T, store *flowstore.Store, record flowstore.Flo
 		t.Fatalf("Create(%s): %v", record.FlowID, err)
 	}
 	return created
+}
+
+func mustSetClientPhase(t *testing.T, store *flowstore.Store, flowID, phaseID, status string) flowstore.FlowRecord {
+	t.Helper()
+	record, err := store.SetPhase(flowstore.PhaseUpdate{
+		FlowID:  flowID,
+		PhaseID: phaseID,
+		Status:  status,
+	})
+	if err != nil {
+		t.Fatalf("SetPhase(%s/%s=%s): %v", flowID, phaseID, status, err)
+	}
+	return record
 }
 
 func saveClientPlan(t *testing.T, root string) (string, string) {

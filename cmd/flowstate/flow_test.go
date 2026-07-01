@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +13,7 @@ import (
 
 	"github.com/brian-bell/flowstate/config"
 	"github.com/brian-bell/flowstate/flowstore"
+	"github.com/brian-bell/flowstate/internal/daemoncoords"
 	"github.com/brian-bell/flowstate/planstore"
 )
 
@@ -1414,6 +1417,73 @@ func TestRunFlowCreateStateRootPrecedence(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(planRoot, "flows", record.FlowID, "meta.json")); !os.IsNotExist(err) {
 		t.Fatalf("flow should not be under plan root")
+	}
+}
+
+func TestRunFlowListUsesStateRootDaemonDiscovery(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args func(root string) []string
+		env  bool
+	}{
+		{
+			name: "flag",
+			args: func(root string) []string {
+				return []string{"wtui", "flow", "list", "--state-root", root, "--json"}
+			},
+		},
+		{
+			name: "flow env",
+			args: func(string) []string {
+				return []string{"wtui", "flow", "list", "--json"}
+			},
+			env: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("FLOWSTATE_DAEMON_URL", "")
+			t.Setenv("FLOWSTATE_DAEMON_TOKEN", "")
+			root := t.TempDir()
+			if tc.env {
+				t.Setenv("FLOWSTATE_FLOW_STATE_ROOT", root)
+			}
+			requests := 0
+			daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests++
+				if got := r.Header.Get("Authorization"); got != "Bearer root-token" {
+					t.Fatalf("Authorization = %q, want root token", got)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"data":{"flows":[]}}`))
+			}))
+			defer daemon.Close()
+			if err := daemoncoords.WriteForStateRoot(root, daemoncoords.Coords{
+				URL:     daemon.URL,
+				Token:   "root-token",
+				PID:     os.Getpid(),
+				Version: "test",
+			}); err != nil {
+				t.Fatalf("WriteForStateRoot: %v", err)
+			}
+
+			var stdout bytes.Buffer
+			err := run(tc.args(root), runDeps{
+				stdout: &stdout,
+			})
+			if err != nil {
+				t.Fatalf("run returned error: %v", err)
+			}
+			if requests != 1 {
+				t.Fatalf("daemon requests = %d, want 1", requests)
+			}
+			var records []flowstore.FlowRecord
+			if err := json.Unmarshal(stdout.Bytes(), &records); err != nil {
+				t.Fatalf("output is not JSON: %v\n%s", err, stdout.String())
+			}
+			if len(records) != 0 {
+				t.Fatalf("records = %#v, want empty list from state-root daemon", records)
+			}
+		})
 	}
 }
 

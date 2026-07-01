@@ -287,11 +287,13 @@ type PlanResultMsg struct {
 type FlowResultMsg struct {
 	RepoPath    string
 	Flows       []flowstore.FlowRecord
+	FlowViews   []FlowView
 	ListRequest uint64
 }
 
 type ActiveFlowResultMsg struct {
 	Flows       []flowstore.FlowRecord
+	FlowViews   []FlowView
 	ListRequest uint64
 }
 
@@ -390,6 +392,14 @@ type FlowEmbeddedLaunchRequestedMsg struct {
 	Request       uint64
 }
 
+type FlowPhaseLaunchedMsg struct {
+	RepoPath  string
+	FlowID    string
+	PhaseID   string
+	LaunchID  string
+	DaemonRun bool
+}
+
 type FlowCreatedMsg struct {
 	RepoPath string
 	FlowID   string
@@ -417,6 +427,29 @@ type FlowDeleteFailedMsg struct {
 	Title    string
 	Err      string
 	NotFound bool
+}
+
+type flowRuntimeJobCancelConfirmedMsg struct {
+	RepoPath string
+	FlowID   string
+	PhaseID  string
+	JobID    string
+}
+
+type flowRuntimeJobCancelledMsg struct {
+	RepoPath string
+	FlowID   string
+	PhaseID  string
+	JobID    string
+	Job      FlowRuntimeJob
+}
+
+type flowRuntimeJobCancelFailedMsg struct {
+	RepoPath string
+	FlowID   string
+	PhaseID  string
+	JobID    string
+	Err      string
 }
 
 type flowPhaseResetConfirmedMsg struct {
@@ -1287,6 +1320,10 @@ func (m Model) handleFlowResult(msg FlowResultMsg) (Model, tea.Cmd) {
 		return m, nil
 	}
 	previousFlows := append([]flowstore.FlowRecord(nil), m.flows.Items()...)
+	views := msg.FlowViews
+	if len(views) == 0 && len(msg.Flows) > 0 {
+		views = flowViewsFromRecords(msg.Flows)
+	}
 	selectedFlowID := ""
 	if record, ok := m.flows.Selected(); ok {
 		selectedFlowID = record.FlowID
@@ -1294,6 +1331,7 @@ func (m Model) handleFlowResult(msg FlowResultMsg) (Model, tea.Cmd) {
 	expandedFlowID := m.expandedFlowID
 	selectedFlowPhaseID := m.selectedFlowPhaseID
 	m.flows = m.flows.SetItems(msg.Flows)
+	m.flowRuntimeJobs = flowRuntimeJobsFromViews(views)
 	if selectedFlowID != "" {
 		m.flows = m.flows.SelectFunc(func(record flowstore.FlowRecord) bool {
 			return record.FlowID == selectedFlowID
@@ -1325,7 +1363,12 @@ func (m Model) handleActiveFlowResult(msg ActiveFlowResultMsg) (Model, tea.Cmd) 
 		return m, nil
 	}
 	previousFlows := append([]flowstore.FlowRecord(nil), m.activeFlowRecords...)
+	views := msg.FlowViews
+	if len(views) == 0 && len(msg.Flows) > 0 {
+		views = flowViewsFromRecords(msg.Flows)
+	}
 	m.activeFlowRecords = append([]flowstore.FlowRecord(nil), msg.Flows...)
+	m.flowRuntimeJobs = flowRuntimeJobsFromViews(views)
 	m = m.syncActiveFlowsFromCache()
 	m = m.clampSelectionsAfterFilter()
 	if m.flowFocus != flowFocusTerminal {
@@ -1346,6 +1389,36 @@ func (m Model) handleFlowAutoModeSet(msg FlowAutoModeSetMsg) Model {
 		return m
 	}
 	return m.replaceFlowRecord(msg.Flow)
+}
+
+func (m Model) handleFlowPhaseLaunched(msg FlowPhaseLaunchedMsg) (Model, tea.Cmd) {
+	if msg.FlowID == "" || (!m.activeFlowSurfaceVisible() && !m.isCurrentRepo(msg.RepoPath)) {
+		return m, nil
+	}
+	m = m.setStatus(statusOther, fmt.Sprintf("launched Flow phase %s", msg.PhaseID))
+	if m.flowSurfaceVisible() {
+		return m.startFlowSurfaceFetch()
+	}
+	return m, nil
+}
+
+func (m Model) handleFlowRuntimeJobCancelled(msg flowRuntimeJobCancelledMsg) (Model, tea.Cmd) {
+	if !m.activeFlowSurfaceVisible() && !m.isCurrentRepo(msg.RepoPath) {
+		return m, nil
+	}
+	m = m.setStatus(statusOther, fmt.Sprintf("canceled Flow runtime job %s", msg.JobID))
+	return m.startFlowSurfaceFetch()
+}
+
+func (m Model) handleFlowRuntimeJobCancelFailed(msg flowRuntimeJobCancelFailedMsg) (Model, tea.Cmd) {
+	if !m.activeFlowSurfaceVisible() && !m.isCurrentRepo(msg.RepoPath) {
+		return m, nil
+	}
+	errText := strings.TrimSpace(msg.Err)
+	if errText == "" {
+		errText = "failed to cancel Flow runtime job"
+	}
+	return m.setStatus(statusOther, errText), nil
 }
 
 func (m Model) handleFlowAutoModeSetFailed(msg FlowAutoModeSetFailedMsg) Model {

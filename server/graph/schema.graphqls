@@ -17,12 +17,15 @@ input FlowFilterInput {
 }
 
 type Mutation {
+  createRawFlow(input: RawFlowInput!): Flow!
   createFlow(input: CreateFlowInput!): Flow!
   createFlowAndLaunchPlan(input: CreateFlowAndLaunchPlanInput!): CreateFlowAndLaunchPlanPayload!
   startFlow(input: StartFlowInput!): StartFlowPayload!
   launchFlowPhase(input: LaunchFlowPhaseInput!): LaunchFlowPhasePayload!
+  addFlowPhaseLaunchID(input: AddFlowPhaseLaunchInput!): AddFlowPhaseLaunchPayload!
   cancelRuntimeJob(id: ID!): RuntimeJob!
   setFlowPhaseStatus(input: SetFlowPhaseStatusInput!): SetFlowPhaseStatusPayload!
+  resetFlowPhase(input: ResetFlowPhaseInput!): ResetFlowPhasePayload!
   restartFlowPhase(input: RestartFlowPhaseInput!): RestartFlowPhasePayload!
   addFlowChildPhase(input: AddFlowChildPhaseInput!): AddFlowChildPhasePayload!
   setFlowPlanLink(input: SetFlowPlanLinkInput!): SetFlowPlanLinkPayload!
@@ -30,6 +33,16 @@ type Mutation {
   setFlowMerge(input: SetFlowMergeInput!): SetFlowMergePayload!
   setFlowAutoMode(input: SetFlowAutoModeInput!): SetFlowAutoModePayload!
   deleteFlow(id: ID!): DeleteFlowPayload!
+}
+
+input RawFlowInput {
+  repoPath: String!
+  title: String!
+  instructions: String!
+  worktreePath: String
+  branch: String
+  baseRef: String
+  commit: String
 }
 
 input CreateFlowInput {
@@ -61,6 +74,7 @@ input StartFlowInput {
   instructions: String!
   baseRef: String
   launchPlan: Boolean!
+  headless: Boolean
   agentCommand: String
   reasoningEffort: String
 }
@@ -77,13 +91,30 @@ input LaunchFlowPhaseInput {
   phaseId: ID!
   agentCommand: String
   reasoningEffort: String
+  headless: Boolean
+  autoLaunch: Boolean
 }
 
 type LaunchFlowPhasePayload {
   flowId: ID!
   phaseId: ID!
+  launchId: ID
+  job: RuntimeJob
+  skipped: Boolean!
+}
+
+input AddFlowPhaseLaunchInput {
+  flowId: ID!
+  phaseId: ID!
   launchId: ID!
-  job: RuntimeJob!
+  resume: Boolean
+  autoLaunch: Boolean
+  rejectRunning: Boolean
+}
+
+type AddFlowPhaseLaunchPayload {
+  flow: Flow!
+  phase: FlowPhase!
 }
 
 input SetFlowPhaseStatusInput {
@@ -96,6 +127,16 @@ input SetFlowPhaseStatusInput {
 }
 
 type SetFlowPhaseStatusPayload {
+  flow: Flow!
+  phase: FlowPhase!
+}
+
+input ResetFlowPhaseInput {
+  flowId: ID!
+  phaseId: ID!
+}
+
+type ResetFlowPhasePayload {
   flow: Flow!
   phase: FlowPhase!
 }

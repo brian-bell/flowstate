@@ -19,6 +19,7 @@ type FlowStartRequest struct {
 	BaseRef             string
 	AgentCommand        string
 	ReasoningEffort     string
+	Headless            bool
 	SessionStateRoot    string
 	FlowPromptTemplates FlowPromptTemplates
 	// FlowPromptTemplatesProvided forces StartPlan to use FlowPromptTemplates
@@ -31,11 +32,12 @@ type FlowStartRequest struct {
 
 // FlowStartResult is the prepared or launch-ready result of creating a new Flow.
 type FlowStartResult struct {
-	Flow          flowstore.FlowRecord
-	Worktree      actions.FlowWorktreeCreateResult
-	Commit        string
-	LaunchID      string
-	LaunchContext actions.AgentLaunchContext
+	Flow           flowstore.FlowRecord
+	Worktree       actions.FlowWorktreeCreateResult
+	Commit         string
+	LaunchID       string
+	LaunchContext  actions.AgentLaunchContext
+	DaemonLaunched bool
 }
 
 // FlowStarterOptions groups the deeper orchestration adapters for starting a

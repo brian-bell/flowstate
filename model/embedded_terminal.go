@@ -17,6 +17,8 @@ import (
 	"github.com/brian-bell/flowstate/actions"
 	"github.com/brian-bell/flowstate/agent"
 	"github.com/brian-bell/flowstate/embeddedterm"
+	"github.com/brian-bell/flowstate/flowstore"
+	"github.com/brian-bell/flowstate/internal/artifacts"
 	"github.com/brian-bell/flowstate/model/modal"
 	"github.com/brian-bell/flowstate/sessions"
 	"github.com/brian-bell/flowstate/ui"
@@ -212,7 +214,21 @@ func (m Model) embeddedTerminalTabs() []ui.EmbeddedTerminalTab {
 }
 
 func (m Model) flowEmbeddedTerminalTabs() []ui.EmbeddedTerminalTab {
-	return m.embeddedTerminalTabsForScope(embeddedTerminalScopeFlow)
+	tabs := m.embeddedTerminalTabsForScope(embeddedTerminalScopeFlow)
+	if len(tabs) > 0 {
+		return tabs
+	}
+	job, ok := m.selectedDaemonFlowRuntimeJob()
+	if !ok {
+		return nil
+	}
+	return []ui.EmbeddedTerminalTab{{
+		Number:   1,
+		Provider: "daemon",
+		Identity: job.PhaseID,
+		State:    job.Status,
+		Active:   true,
+	}}
 }
 
 func (m Model) flowTerminalActivity() []ui.FlowTerminalActivity {
@@ -225,6 +241,17 @@ func (m Model) flowTerminalActivity() []ui.FlowTerminalActivity {
 			FlowID:  slot.FlowID,
 			PhaseID: slot.FlowPhaseID,
 		})
+	}
+	for flowID, jobsByPhase := range m.flowRuntimeJobs {
+		for phaseID, job := range jobsByPhase {
+			if strings.TrimSpace(job.ID) == "" {
+				continue
+			}
+			activity = append(activity, ui.FlowTerminalActivity{
+				FlowID:  flowID,
+				PhaseID: phaseID,
+			})
+		}
 	}
 	return activity
 }
@@ -295,7 +322,54 @@ func (m Model) embeddedTerminalLines() []string {
 }
 
 func (m Model) flowEmbeddedTerminalLines() []string {
-	return m.embeddedTerminalLinesForScope(embeddedTerminalScopeFlow)
+	if m.hasEmbeddedTerminalForScope(embeddedTerminalScopeFlow) {
+		return m.embeddedTerminalLinesForScope(embeddedTerminalScopeFlow)
+	}
+	job, ok := m.selectedDaemonFlowRuntimeJob()
+	if !ok {
+		return nil
+	}
+	var lines []string
+	header := "daemon runtime " + job.Status
+	if job.ID != "" {
+		header += " " + job.ID
+	}
+	lines = append(lines, header)
+	if job.PhaseUpdateError != "" {
+		lines = append(lines, "phase update error: "+job.PhaseUpdateError)
+	}
+	if job.Error != "" {
+		lines = append(lines, "error: "+job.Error)
+	}
+	if job.LogTail != "" {
+		lines = append(lines, strings.Split(strings.TrimRight(job.LogTail, "\n"), "\n")...)
+	}
+	if job.LogTruncated {
+		lines = append(lines, "[log truncated]")
+	}
+	return lines
+}
+
+func (m Model) selectedDaemonFlowRuntimeJob() (FlowRuntimeJob, bool) {
+	record, ok := m.selectedFlow()
+	if !ok || record.FlowID == "" {
+		return FlowRuntimeJob{}, false
+	}
+	jobsByPhase := m.flowRuntimeJobs[record.FlowID]
+	if len(jobsByPhase) == 0 {
+		return FlowRuntimeJob{}, false
+	}
+	if phase, ok := m.selectedFlowPhase(); ok {
+		if job, ok := jobsByPhase[artifacts.NormalizePhaseID(phase.PhaseID)]; ok {
+			return job, true
+		}
+	}
+	for _, phase := range flowstore.OrderedPhases(record.Phases) {
+		if job, ok := jobsByPhase[artifacts.NormalizePhaseID(phase.PhaseID)]; ok {
+			return job, true
+		}
+	}
+	return FlowRuntimeJob{}, false
 }
 
 func (m Model) embeddedTerminalLinesForScope(scope embeddedTerminalScope) []string {

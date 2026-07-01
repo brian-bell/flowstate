@@ -23,6 +23,20 @@ type AddFlowChildPhasePayload struct {
 	Phase *FlowPhase `json:"phase"`
 }
 
+type AddFlowPhaseLaunchInput struct {
+	FlowID        string `json:"flowId"`
+	PhaseID       string `json:"phaseId"`
+	LaunchID      string `json:"launchId"`
+	Resume        *bool  `json:"resume,omitempty"`
+	AutoLaunch    *bool  `json:"autoLaunch,omitempty"`
+	RejectRunning *bool  `json:"rejectRunning,omitempty"`
+}
+
+type AddFlowPhaseLaunchPayload struct {
+	Flow  *Flow      `json:"flow"`
+	Phase *FlowPhase `json:"phase"`
+}
+
 type CreateFlowAndLaunchPlanInput struct {
 	RepoPath        string  `json:"repoPath"`
 	Title           string  `json:"title"`
@@ -114,13 +128,16 @@ type LaunchFlowPhaseInput struct {
 	PhaseID         string  `json:"phaseId"`
 	AgentCommand    *string `json:"agentCommand,omitempty"`
 	ReasoningEffort *string `json:"reasoningEffort,omitempty"`
+	Headless        *bool   `json:"headless,omitempty"`
+	AutoLaunch      *bool   `json:"autoLaunch,omitempty"`
 }
 
 type LaunchFlowPhasePayload struct {
 	FlowID   string      `json:"flowId"`
 	PhaseID  string      `json:"phaseId"`
-	LaunchID string      `json:"launchId"`
-	Job      *RuntimeJob `json:"job"`
+	LaunchID *string     `json:"launchId,omitempty"`
+	Job      *RuntimeJob `json:"job,omitempty"`
+	Skipped  bool        `json:"skipped"`
 }
 
 type Merge struct {
@@ -142,6 +159,26 @@ type PullRequest struct {
 }
 
 type Query struct {
+}
+
+type RawFlowInput struct {
+	RepoPath     string  `json:"repoPath"`
+	Title        string  `json:"title"`
+	Instructions string  `json:"instructions"`
+	WorktreePath *string `json:"worktreePath,omitempty"`
+	Branch       *string `json:"branch,omitempty"`
+	BaseRef      *string `json:"baseRef,omitempty"`
+	Commit       *string `json:"commit,omitempty"`
+}
+
+type ResetFlowPhaseInput struct {
+	FlowID  string `json:"flowId"`
+	PhaseID string `json:"phaseId"`
+}
+
+type ResetFlowPhasePayload struct {
+	Flow  *Flow      `json:"flow"`
+	Phase *FlowPhase `json:"phase"`
 }
 
 type RestartFlowPhaseInput struct {
@@ -237,6 +274,7 @@ type StartFlowInput struct {
 	Instructions    string  `json:"instructions"`
 	BaseRef         *string `json:"baseRef,omitempty"`
 	LaunchPlan      bool    `json:"launchPlan"`
+	Headless        *bool   `json:"headless,omitempty"`
 	AgentCommand    *string `json:"agentCommand,omitempty"`
 	ReasoningEffort *string `json:"reasoningEffort,omitempty"`
 }

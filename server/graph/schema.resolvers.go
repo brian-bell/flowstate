@@ -20,6 +20,28 @@ import (
 	"github.com/brian-bell/flowstate/server/runtimejobs"
 )
 
+// CreateRawFlow is the resolver for the createRawFlow field.
+func (r *mutationResolver) CreateRawFlow(ctx context.Context, input model.RawFlowInput) (*model.Flow, error) {
+	_ = ctx
+	if r.FlowStore == nil {
+		return nil, fmt.Errorf("flow store is not configured")
+	}
+	record, err := r.FlowStore.Create(flowstore.FlowRecord{
+		Title:        input.Title,
+		Instructions: input.Instructions,
+		RepoPath:     input.RepoPath,
+		WorktreePath: optionalString(input.WorktreePath),
+		Branch:       optionalString(input.Branch),
+		BaseRef:      optionalString(input.BaseRef),
+		Commit:       optionalString(input.Commit),
+	})
+	if err != nil {
+		return nil, err
+	}
+	view := r.flowView(record)
+	return flowToGraphQL(view), nil
+}
+
 // CreateFlow is the resolver for the createFlow field.
 func (r *mutationResolver) CreateFlow(ctx context.Context, input model.CreateFlowInput) (*model.Flow, error) {
 	if r.FlowCreator == nil {
@@ -91,7 +113,7 @@ func (r *mutationResolver) CreateFlowAndLaunchPlan(ctx context.Context, input mo
 	if !flowlaunch.PhaseCanLaunch(record, phase) {
 		return nil, fmt.Errorf("phase %q is not launchable from status %q", phase.PhaseID, phase.Status)
 	}
-	launch, err := r.startFlowRuntimeJob(ctx, record, phase, command, reasoningEffort)
+	launch, err := r.startFlowRuntimeJob(ctx, record, phase, command, reasoningEffort, true, false)
 	if err != nil {
 		var startErr *flowRuntimeStartError
 		if !errors.As(err, &startErr) {
@@ -136,12 +158,19 @@ func (r *mutationResolver) StartFlow(ctx context.Context, input model.StartFlowI
 	}
 	var command string
 	var reasoningEffort string
+	headless := true
 	if input.LaunchPlan {
 		if r.FlowStore == nil {
 			return nil, fmt.Errorf("flow store is not configured")
 		}
 		if r.RuntimeStarter == nil {
 			return nil, fmt.Errorf("runtime job starter is not configured")
+		}
+		if input.Headless != nil {
+			headless = *input.Headless
+		}
+		if !headless {
+			return nil, fmt.Errorf("daemon runtime launches require headless mode")
 		}
 		var err error
 		command, err = r.launchAgentCommand(input.AgentCommand)
@@ -181,7 +210,7 @@ func (r *mutationResolver) StartFlow(ctx context.Context, input model.StartFlowI
 	if !flowlaunch.PhaseCanLaunch(record, phase) {
 		return nil, fmt.Errorf("phase %q is not launchable from status %q", phase.PhaseID, phase.Status)
 	}
-	launch, err := r.startFlowRuntimeJob(ctx, record, phase, command, reasoningEffort)
+	launch, err := r.startFlowRuntimeJob(ctx, record, phase, command, reasoningEffort, headless, false)
 	if err != nil {
 		var startErr *flowRuntimeStartError
 		if !errors.As(err, &startErr) {
@@ -229,9 +258,6 @@ func (r *mutationResolver) LaunchFlowPhase(ctx context.Context, input model.Laun
 	if !ok {
 		return nil, fmt.Errorf("phase %q not found in flow %q", input.PhaseID, input.FlowID)
 	}
-	if !flowlaunch.PhaseCanLaunch(record, phase) {
-		return nil, fmt.Errorf("phase %q is not launchable from status %q", phase.PhaseID, phase.Status)
-	}
 	command, err := r.launchAgentCommand(input.AgentCommand)
 	if err != nil {
 		return nil, err
@@ -240,16 +266,66 @@ func (r *mutationResolver) LaunchFlowPhase(ctx context.Context, input model.Laun
 	if err != nil {
 		return nil, err
 	}
-	launch, err := r.startFlowRuntimeJob(ctx, record, phase, command, reasoningEffort)
+	headless := true
+	if input.Headless != nil {
+		headless = *input.Headless
+	}
+	autoLaunch := false
+	if input.AutoLaunch != nil {
+		autoLaunch = *input.AutoLaunch
+	}
+	if !autoLaunch && !flowlaunch.PhaseCanLaunch(record, phase) {
+		return nil, fmt.Errorf("phase %q is not launchable from status %q", phase.PhaseID, phase.Status)
+	}
+	launch, err := r.startFlowRuntimeJob(ctx, record, phase, command, reasoningEffort, headless, autoLaunch)
 	if err != nil {
 		return nil, err
 	}
+	if launch.Skipped {
+		return &model.LaunchFlowPhasePayload{
+			FlowID:  record.FlowID,
+			PhaseID: phase.PhaseID,
+			Skipped: true,
+		}, nil
+	}
+	launchID := launch.Context.LaunchID
 	return &model.LaunchFlowPhasePayload{
 		FlowID:   record.FlowID,
 		PhaseID:  launch.Context.FlowPhaseID,
-		LaunchID: launch.Context.LaunchID,
+		LaunchID: &launchID,
 		Job:      runtimeJobSnapshotToGraphQL(launch.Snapshot),
+		Skipped:  false,
 	}, nil
+}
+
+// AddFlowPhaseLaunchID is the resolver for the addFlowPhaseLaunchID field.
+func (r *mutationResolver) AddFlowPhaseLaunchID(ctx context.Context, input model.AddFlowPhaseLaunchInput) (*model.AddFlowPhaseLaunchPayload, error) {
+	if r.FlowStore == nil {
+		return nil, fmt.Errorf("flow store is not configured")
+	}
+	update := flowstore.PhaseLaunchUpdate{
+		FlowID:   input.FlowID,
+		PhaseID:  input.PhaseID,
+		LaunchID: input.LaunchID,
+	}
+	if input.Resume != nil {
+		update.Resume = *input.Resume
+	}
+	if input.AutoLaunch != nil {
+		update.AutoLaunch = *input.AutoLaunch
+	}
+	if input.RejectRunning != nil {
+		update.RejectRunning = *input.RejectRunning
+	}
+	record, err := r.FlowStore.AddPhaseLaunchID(update)
+	if err != nil {
+		return nil, fmt.Errorf("add flow phase launch %q/%q: %w", input.FlowID, input.PhaseID, err)
+	}
+	flow, phase, err := r.flowAndPhase(record, input.PhaseID)
+	if err != nil {
+		return nil, err
+	}
+	return &model.AddFlowPhaseLaunchPayload{Flow: flow, Phase: phase}, nil
 }
 
 // CancelRuntimeJob is the resolver for the cancelRuntimeJob field.
@@ -317,6 +393,25 @@ func (r *mutationResolver) SetFlowPhaseStatus(ctx context.Context, input model.S
 		}
 	}
 	return nil, fmt.Errorf("set flow phase status %q/%q: updated phase not found", input.FlowID, input.PhaseID)
+}
+
+// ResetFlowPhase is the resolver for the resetFlowPhase field.
+func (r *mutationResolver) ResetFlowPhase(ctx context.Context, input model.ResetFlowPhaseInput) (*model.ResetFlowPhasePayload, error) {
+	if r.FlowStore == nil {
+		return nil, fmt.Errorf("flow store is not configured")
+	}
+	record, err := r.FlowStore.ResetAwaitingSessionPhase(flowstore.PhaseResetUpdate{
+		FlowID:  input.FlowID,
+		PhaseID: input.PhaseID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("reset flow phase %q/%q: %w", input.FlowID, input.PhaseID, err)
+	}
+	flow, phase, err := r.flowAndPhase(record, input.PhaseID)
+	if err != nil {
+		return nil, err
+	}
+	return &model.ResetFlowPhasePayload{Flow: flow, Phase: phase}, nil
 }
 
 // RestartFlowPhase is the resolver for the restartFlowPhase field.

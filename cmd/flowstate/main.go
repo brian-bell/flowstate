@@ -9,15 +9,19 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/brian-bell/flowstate/actions"
+	"github.com/brian-bell/flowstate/agent"
 	"github.com/brian-bell/flowstate/config"
 	"github.com/brian-bell/flowstate/flowlaunch"
 	"github.com/brian-bell/flowstate/flowstore"
+	"github.com/brian-bell/flowstate/internal/daemonclient"
+	"github.com/brian-bell/flowstate/internal/daemoncoords"
 	"github.com/brian-bell/flowstate/internal/version"
 	"github.com/brian-bell/flowstate/model"
 	"github.com/brian-bell/flowstate/planstore"
@@ -42,6 +46,7 @@ type runDeps struct {
 	startProgram            func([]scanner.Repo, config.Config) error
 	startProgramWithOptions func([]scanner.Repo, startProgramOptions) error
 	serve                   func(context.Context, serveOptions) error
+	newFlowClient           func(string) (daemonclient.FlowClient, error)
 	stdin                   io.Reader
 	stdout                  io.Writer
 }
@@ -253,6 +258,17 @@ func fillRunDeps(deps runDeps) runDeps {
 	if deps.serve == nil {
 		deps.serve = server.Run
 	}
+	if deps.newFlowClient == nil {
+		deps.newFlowClient = func(stateRoot string) (daemonclient.FlowClient, error) {
+			opts := daemonclient.Options{}
+			if stateRoot != "" {
+				opts.Coords = func() (daemoncoords.Coords, error) {
+					return daemoncoords.ReadForStateRoot(stateRoot)
+				}
+			}
+			return daemonclient.New(opts)
+		}
+	}
 	if deps.stdin == nil {
 		deps.stdin = os.Stdin
 	}
@@ -284,11 +300,15 @@ func runServe(args []string, deps runDeps) error {
 	if err != nil {
 		return fmt.Errorf("error loading config: %w", err)
 	}
+	stateRoot, err := runtimeArtifactRootWithEnv(cfg, deps.getenv)
+	if err != nil {
+		return err
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if err := deps.serve(ctx, serveOptions{
 		Listen:                *listen,
-		StateRoot:             runtimeArtifactRootWithEnv(cfg, deps.getenv),
+		StateRoot:             stateRoot,
 		AgentCommand:          cfg.Agent.Command,
 		CodexReasoningEffort:  cfg.Agent.CodexReasoningEffort,
 		ClaudeReasoningEffort: cfg.Agent.ClaudeReasoningEffort,
@@ -370,7 +390,10 @@ func runSessionHook(args []string, deps runDeps) error {
 
 func startProgram(repos []scanner.Repo, opts startProgramOptions) error {
 	cfg := opts.Config
-	artifactRoot := runtimeArtifactRoot(cfg)
+	artifactRoot, err := runtimeArtifactRoot(cfg)
+	if err != nil {
+		return err
+	}
 	sessionStore, err := sessions.NewStore(sessions.StoreOptions{
 		Root:               artifactRoot,
 		CopyRawTranscripts: cfg.Sessions.CopyRawTranscripts,
@@ -382,18 +405,110 @@ func startProgram(repos []scanner.Repo, opts startProgramOptions) error {
 	if err != nil {
 		return err
 	}
-	flowStore, err := flowstore.NewStore(flowstore.StoreOptions{Root: sessionStore.Root()})
-	if err != nil {
-		return err
-	}
-	modelOpts := modelOptionsFromConfig(cfg, opts.ScanRepos, sessionStore, planStore, flowStore)
+	flowClient := flowClientForTUI(artifactRoot)
+	modelOpts := modelOptionsFromConfig(cfg, opts.ScanRepos, sessionStore, planStore, flowClient)
 	modelOpts.RepoCreateRoot = opts.RepoCreateRoot
 	p := tea.NewProgram(model.NewWithOptions(repos, modelOpts), tea.WithAltScreen())
 	_, err = p.Run()
 	return err
 }
 
-func modelOptionsFromConfig(cfg config.Config, scanRepos func() ([]scanner.Repo, error), sessionStore *sessions.Store, planStore *planstore.Store, flowStore *flowstore.Store) model.Options {
+func flowClientForTUI(artifactRoot string) daemonclient.FlowClient {
+	flowClient, err := daemonclient.New(daemonclient.Options{
+		Coords: func() (daemoncoords.Coords, error) {
+			return daemoncoords.ReadForStateRoot(artifactRoot)
+		},
+	})
+	if err != nil {
+		return unavailableFlowClient{cause: err}
+	}
+	return flowClient
+}
+
+type unavailableFlowClient struct {
+	cause error
+}
+
+func (c unavailableFlowClient) err() error {
+	if c.cause == nil {
+		return fmt.Errorf("flow daemon client is not configured")
+	}
+	return fmt.Errorf("flow daemon client is not available: %w", c.cause)
+}
+
+func (c unavailableFlowClient) ListFlows(context.Context, flowstore.FlowFilter) ([]flowstore.FlowRecord, error) {
+	return nil, c.err()
+}
+
+func (c unavailableFlowClient) ReadFlow(context.Context, string) (flowstore.FlowRecord, error) {
+	return flowstore.FlowRecord{}, c.err()
+}
+
+func (c unavailableFlowClient) ListFlowViews(context.Context, flowstore.FlowFilter) ([]daemonclient.FlowView, error) {
+	return nil, c.err()
+}
+
+func (c unavailableFlowClient) ReadFlowView(context.Context, string) (daemonclient.FlowView, error) {
+	return daemonclient.FlowView{}, c.err()
+}
+
+func (c unavailableFlowClient) CreateRawFlow(context.Context, flowstore.FlowRecord) (flowstore.FlowRecord, error) {
+	return flowstore.FlowRecord{}, c.err()
+}
+
+func (c unavailableFlowClient) SetPhase(context.Context, flowstore.PhaseUpdate) (flowstore.FlowRecord, flowstore.FlowPhase, error) {
+	return flowstore.FlowRecord{}, flowstore.FlowPhase{}, c.err()
+}
+
+func (c unavailableFlowClient) ResetFlowPhase(context.Context, flowstore.PhaseResetUpdate) (flowstore.FlowRecord, flowstore.FlowPhase, error) {
+	return flowstore.FlowRecord{}, flowstore.FlowPhase{}, c.err()
+}
+
+func (c unavailableFlowClient) RestartFlowPhase(context.Context, flowstore.PhaseRestartUpdate) (flowstore.FlowRecord, flowstore.FlowPhase, error) {
+	return flowstore.FlowRecord{}, flowstore.FlowPhase{}, c.err()
+}
+
+func (c unavailableFlowClient) AddFlowChildPhase(context.Context, flowstore.ChildPhaseUpdate) (flowstore.FlowRecord, flowstore.FlowPhase, error) {
+	return flowstore.FlowRecord{}, flowstore.FlowPhase{}, c.err()
+}
+
+func (c unavailableFlowClient) SetFlowPlanLink(context.Context, flowstore.PlanLinkUpdate) (flowstore.FlowRecord, error) {
+	return flowstore.FlowRecord{}, c.err()
+}
+
+func (c unavailableFlowClient) SetFlowPR(context.Context, flowstore.PRUpdate) (flowstore.FlowRecord, flowstore.PullRequest, error) {
+	return flowstore.FlowRecord{}, flowstore.PullRequest{}, c.err()
+}
+
+func (c unavailableFlowClient) SetFlowMerge(context.Context, flowstore.MergeUpdate) (flowstore.FlowRecord, flowstore.Merge, error) {
+	return flowstore.FlowRecord{}, flowstore.Merge{}, c.err()
+}
+
+func (c unavailableFlowClient) SetFlowAutoMode(context.Context, flowstore.AutoModeUpdate) (flowstore.FlowRecord, error) {
+	return flowstore.FlowRecord{}, c.err()
+}
+
+func (c unavailableFlowClient) DeleteFlow(context.Context, string) (string, error) {
+	return "", c.err()
+}
+
+func (c unavailableFlowClient) AddFlowPhaseLaunchID(context.Context, flowstore.PhaseLaunchUpdate) (flowstore.FlowRecord, flowstore.FlowPhase, error) {
+	return flowstore.FlowRecord{}, flowstore.FlowPhase{}, c.err()
+}
+
+func (c unavailableFlowClient) StartFlow(context.Context, daemonclient.StartFlowInput) (daemonclient.StartFlowResult, error) {
+	return daemonclient.StartFlowResult{}, c.err()
+}
+
+func (c unavailableFlowClient) LaunchFlowPhase(context.Context, daemonclient.LaunchFlowPhaseInput) (daemonclient.LaunchFlowPhaseResult, error) {
+	return daemonclient.LaunchFlowPhaseResult{}, c.err()
+}
+
+func (c unavailableFlowClient) CancelRuntimeJob(context.Context, string) (daemonclient.RuntimeJob, error) {
+	return daemonclient.RuntimeJob{}, c.err()
+}
+
+func modelOptionsFromConfig(cfg config.Config, scanRepos func() ([]scanner.Repo, error), sessionStore *sessions.Store, planStore *planstore.Store, flowClient daemonclient.FlowClient) model.Options {
 	launchOpts := actions.LaunchOptions{TerminalCommand: cfg.Terminal.Command}
 	startupMode := ui.ModeFlows
 	if cfg.UI.DefaultView != nil {
@@ -422,8 +537,117 @@ func modelOptionsFromConfig(cfg config.Config, scanRepos func() ([]scanner.Repo,
 		ListSessions:     sessionStore.List,
 		ReadTranscript:   sessionStore.ReadTranscript,
 		ListPlans:        planStore.List,
-		ListFlows:        flowStore.List,
-		ReadPlan:         planStore.ReadPlan,
+		ListFlows: func(filter flowstore.FlowFilter) ([]flowstore.FlowRecord, error) {
+			return flowClient.ListFlows(context.Background(), filter)
+		},
+		ListFlowViews: func(filter flowstore.FlowFilter) ([]model.FlowView, error) {
+			views, err := flowClient.ListFlowViews(context.Background(), filter)
+			if err != nil {
+				return nil, err
+			}
+			return modelFlowViewsFromDaemon(views), nil
+		},
+		CreateFlow: func(req model.FlowStartRequest) (model.FlowStartResult, error) {
+			result, err := flowClient.StartFlow(context.Background(), daemonclient.StartFlowInput{
+				RepoPath:     req.RepoPath,
+				Title:        req.Title,
+				Instructions: req.Instructions,
+				BaseRef:      req.BaseRef,
+				LaunchPlan:   false,
+			})
+			if err != nil {
+				return model.FlowStartResult{}, err
+			}
+			if err := flowStartBlockedError(result.Flow); err != nil {
+				return model.FlowStartResult{Flow: result.Flow, DaemonLaunched: true}, err
+			}
+			return model.FlowStartResult{Flow: result.Flow}, nil
+		},
+		StartFlowPlan: func(req model.FlowStartRequest) (model.FlowStartResult, error) {
+			command := agent.Normalize(req.AgentCommand)
+			if command == agent.CommandCodexApp {
+				// codex-app runs as an external macOS app and cannot run Flow
+				// phases, which execute headless as daemon runtime jobs. Reject
+				// before creating a flow so no orphan record is left behind.
+				return model.FlowStartResult{}, fmt.Errorf("codex-app cannot run Flow phases; choose codex or claude")
+			}
+			if !req.Headless {
+				return model.FlowStartResult{}, fmt.Errorf("interactive daemon Flow launches are not supported; enable headless mode")
+			}
+			result, err := flowClient.StartFlow(context.Background(), daemonclient.StartFlowInput{
+				RepoPath:        req.RepoPath,
+				Title:           req.Title,
+				Instructions:    req.Instructions,
+				BaseRef:         req.BaseRef,
+				LaunchPlan:      true,
+				Headless:        true,
+				AgentCommand:    req.AgentCommand,
+				ReasoningEffort: req.ReasoningEffort,
+			})
+			if err != nil {
+				return model.FlowStartResult{}, err
+			}
+			if err := flowStartBlockedError(result.Flow); err != nil {
+				return model.FlowStartResult{Flow: result.Flow, LaunchID: result.LaunchID, DaemonLaunched: true}, err
+			}
+			if result.LaunchError != "" {
+				return model.FlowStartResult{Flow: result.Flow, LaunchID: result.LaunchID, DaemonLaunched: true}, fmt.Errorf("daemon launch failed: %s", result.LaunchError)
+			}
+			return model.FlowStartResult{
+				Flow:           result.Flow,
+				LaunchID:       result.LaunchID,
+				DaemonLaunched: true,
+			}, nil
+		},
+		LaunchFlowPhase: func(req model.DaemonFlowPhaseLaunchRequest) (model.DaemonFlowPhaseLaunchResult, error) {
+			if !req.Headless {
+				return model.DaemonFlowPhaseLaunchResult{}, fmt.Errorf("interactive daemon Flow launches are not supported; enable headless mode")
+			}
+			result, err := flowClient.LaunchFlowPhase(context.Background(), daemonclient.LaunchFlowPhaseInput{
+				FlowID:          req.FlowID,
+				PhaseID:         req.PhaseID,
+				AgentCommand:    req.AgentCommand,
+				ReasoningEffort: req.ReasoningEffort,
+				Headless:        true,
+				AutoLaunch:      req.AutoLaunch,
+			})
+			if err != nil {
+				return model.DaemonFlowPhaseLaunchResult{}, err
+			}
+			return model.DaemonFlowPhaseLaunchResult{
+				FlowID:   result.FlowID,
+				PhaseID:  result.PhaseID,
+				LaunchID: result.LaunchID,
+				Skipped:  result.Skipped,
+			}, nil
+		},
+		CancelRuntimeJob: func(jobID string) (model.FlowRuntimeJob, error) {
+			job, err := flowClient.CancelRuntimeJob(context.Background(), jobID)
+			if err != nil {
+				return model.FlowRuntimeJob{}, err
+			}
+			return modelFlowRuntimeJobFromDaemon(job), nil
+		},
+		SetFlowPhase: func(update flowstore.PhaseUpdate) (flowstore.FlowRecord, error) {
+			record, _, err := flowClient.SetPhase(context.Background(), update)
+			return record, err
+		},
+		AddFlowPhaseLaunchID: func(update flowstore.PhaseLaunchUpdate) (flowstore.FlowRecord, error) {
+			record, _, err := flowClient.AddFlowPhaseLaunchID(context.Background(), update)
+			return record, err
+		},
+		ResetFlowPhase: func(update flowstore.PhaseResetUpdate) (flowstore.FlowRecord, error) {
+			record, _, err := flowClient.ResetFlowPhase(context.Background(), update)
+			return record, err
+		},
+		SetFlowAutoMode: func(update flowstore.AutoModeUpdate) (flowstore.FlowRecord, error) {
+			return flowClient.SetFlowAutoMode(context.Background(), update)
+		},
+		DeleteFlow: func(flowID string) error {
+			_, err := flowClient.DeleteFlow(context.Background(), flowID)
+			return err
+		},
+		ReadPlan: planStore.ReadPlan,
 		LaunchTerminal: func(path string) (actions.TerminalLaunchSpec, error) {
 			return actions.TerminalLaunchWithOptions(path, launchOpts)
 		},
@@ -463,21 +687,85 @@ func modelOptionsFromConfig(cfg config.Config, scanRepos func() ([]scanner.Repo,
 	}
 }
 
-func runtimeArtifactRoot(cfg config.Config) string {
+func flowStartBlockedError(record flowstore.FlowRecord) error {
+	phase, ok := flowlaunch.PhaseByID(record, "plan")
+	if !ok || phase.Status != flowstore.PhaseBlocked {
+		return nil
+	}
+	detail := strings.TrimSpace(phase.Notes)
+	if detail == "" {
+		detail = strings.TrimSpace(phase.Summary)
+	}
+	if detail == "" {
+		detail = strings.TrimSpace(phase.Outcome)
+	}
+	if detail == "" {
+		return fmt.Errorf("flow plan phase blocked")
+	}
+	return fmt.Errorf("flow plan phase blocked: %s", detail)
+}
+
+func flowLaunchPromptTemplatesFromConfig(cfg config.Config) flowlaunch.PromptTemplates {
+	return flowlaunch.PromptTemplates{
+		Plan:           cfg.FlowPrompts.Plan,
+		PlanReview:     cfg.FlowPrompts.PlanReview,
+		Implementation: cfg.FlowPrompts.Implementation,
+		ReviewLoop:     cfg.FlowPrompts.ReviewLoop,
+		PRCreation:     cfg.FlowPrompts.PRCreation,
+		Autoreview:     cfg.FlowPrompts.Autoreview,
+		Merge:          cfg.FlowPrompts.Merge,
+		Generic:        cfg.FlowPrompts.Generic,
+	}
+}
+
+func modelFlowViewsFromDaemon(views []daemonclient.FlowView) []model.FlowView {
+	out := make([]model.FlowView, 0, len(views))
+	for _, view := range views {
+		runtimeJobs := make(map[string]model.FlowRuntimeJob, len(view.RuntimeJobs))
+		for phaseID, job := range view.RuntimeJobs {
+			runtimeJobs[phaseID] = modelFlowRuntimeJobFromDaemon(job)
+		}
+		out = append(out, model.FlowView{Record: view.Record, RuntimeJobs: runtimeJobs})
+	}
+	return out
+}
+
+func modelFlowRuntimeJobFromDaemon(job daemonclient.RuntimeJob) model.FlowRuntimeJob {
+	return model.FlowRuntimeJob{
+		ID:               job.ID,
+		LaunchID:         job.LaunchID,
+		FlowID:           job.FlowID,
+		PhaseID:          job.PhaseID,
+		Status:           job.Status,
+		CreatedAt:        job.CreatedAt,
+		StartedAt:        job.StartedAt,
+		EndedAt:          job.EndedAt,
+		ExitCode:         job.ExitCode,
+		Error:            job.Error,
+		PhaseUpdateError: job.PhaseUpdateError,
+		LogTail:          job.LogTail,
+		LogTruncated:     job.LogTruncated,
+	}
+}
+
+func runtimeArtifactRoot(cfg config.Config) (string, error) {
 	return runtimeArtifactRootWithEnv(cfg, os.Getenv)
 }
 
-func runtimeArtifactRootWithEnv(cfg config.Config, getenv func(string) string) string {
+func runtimeArtifactRootWithEnv(cfg config.Config, getenv func(string) string) (string, error) {
 	if envRoot := getenv("FLOWSTATE_FLOW_STATE_ROOT"); envRoot != "" {
-		return envRoot
+		return envRoot, nil
 	}
 	if envRoot := getenv("FLOWSTATE_PLAN_STATE_ROOT"); envRoot != "" {
-		return envRoot
+		return envRoot, nil
 	}
 	if envRoot := getenv("FLOWSTATE_SESSION_STATE_ROOT"); envRoot != "" {
-		return envRoot
+		return envRoot, nil
 	}
-	return cfg.Sessions.Root
+	if cfg.Sessions.Root != "" {
+		return cfg.Sessions.Root, nil
+	}
+	return flowstore.DefaultRoot()
 }
 
 func bootstrapHookResolver(cfg config.Config) func(string) (actions.BootstrapHook, bool) {

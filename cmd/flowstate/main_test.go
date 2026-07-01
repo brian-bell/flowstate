@@ -14,6 +14,7 @@ import (
 	"github.com/brian-bell/flowstate/actions"
 	"github.com/brian-bell/flowstate/config"
 	"github.com/brian-bell/flowstate/flowstore"
+	"github.com/brian-bell/flowstate/internal/daemonclient"
 	"github.com/brian-bell/flowstate/internal/version"
 	"github.com/brian-bell/flowstate/model"
 	"github.com/brian-bell/flowstate/planstore"
@@ -668,7 +669,11 @@ func TestRuntimeArtifactRootPrecedenceIncludesFlowRoot(t *testing.T) {
 	t.Setenv("FLOWSTATE_PLAN_STATE_ROOT", "/from/plan")
 	t.Setenv("FLOWSTATE_FLOW_STATE_ROOT", "/from/flow")
 
-	if got := runtimeArtifactRoot(cfg); got != "/from/flow" {
+	got, err := runtimeArtifactRoot(cfg)
+	if err != nil {
+		t.Fatalf("runtimeArtifactRoot returned error: %v", err)
+	}
+	if got != "/from/flow" {
 		t.Fatalf("artifact root = %q, want flow root", got)
 	}
 }
@@ -678,18 +683,58 @@ func TestRuntimeArtifactRootFallsBackThroughPlanSessionConfig(t *testing.T) {
 	t.Setenv("FLOWSTATE_FLOW_STATE_ROOT", "")
 	t.Setenv("FLOWSTATE_SESSION_STATE_ROOT", "/from/session")
 	t.Setenv("FLOWSTATE_PLAN_STATE_ROOT", "/from/plan")
-	if got := runtimeArtifactRoot(cfg); got != "/from/plan" {
+	got, err := runtimeArtifactRoot(cfg)
+	if err != nil {
+		t.Fatalf("runtimeArtifactRoot returned error: %v", err)
+	}
+	if got != "/from/plan" {
 		t.Fatalf("artifact root = %q, want plan root", got)
 	}
 
 	t.Setenv("FLOWSTATE_PLAN_STATE_ROOT", "")
-	if got := runtimeArtifactRoot(cfg); got != "/from/session" {
+	got, err = runtimeArtifactRoot(cfg)
+	if err != nil {
+		t.Fatalf("runtimeArtifactRoot returned error: %v", err)
+	}
+	if got != "/from/session" {
 		t.Fatalf("artifact root = %q, want session root", got)
 	}
 
 	t.Setenv("FLOWSTATE_SESSION_STATE_ROOT", "")
-	if got := runtimeArtifactRoot(cfg); got != "/from/config" {
+	got, err = runtimeArtifactRoot(cfg)
+	if err != nil {
+		t.Fatalf("runtimeArtifactRoot returned error: %v", err)
+	}
+	if got != "/from/config" {
 		t.Fatalf("artifact root = %q, want config root", got)
+	}
+}
+
+func TestRuntimeArtifactRootDefaultsWhenConfigRootEmpty(t *testing.T) {
+	stateHome := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", stateHome)
+	t.Setenv("FLOWSTATE_FLOW_STATE_ROOT", "")
+	t.Setenv("FLOWSTATE_PLAN_STATE_ROOT", "")
+	t.Setenv("FLOWSTATE_SESSION_STATE_ROOT", "")
+
+	got, err := runtimeArtifactRoot(config.Config{})
+	if err != nil {
+		t.Fatalf("runtimeArtifactRoot returned error: %v", err)
+	}
+	want := filepath.Join(stateHome, "flowstate", "sessions", "v1")
+	if got != want {
+		t.Fatalf("artifact root = %q, want default %q", got, want)
+	}
+}
+
+func TestFlowClientForTUIToleratesMissingDaemonCoords(t *testing.T) {
+	t.Setenv("FLOWSTATE_DAEMON_URL", "")
+	t.Setenv("FLOWSTATE_DAEMON_TOKEN", "")
+	client := flowClientForTUI(t.TempDir())
+
+	_, err := client.ListFlows(context.Background(), flowstore.FlowFilter{})
+	if err == nil || !strings.Contains(err.Error(), "flow daemon client is not available") {
+		t.Fatalf("ListFlows error = %v, want daemon unavailable error", err)
 	}
 }
 
@@ -702,7 +747,7 @@ func TestModelOptionsFromConfigPassesReasoningEffort(t *testing.T) {
 			CodexReasoningEffort:  "high",
 			ClaudeReasoningEffort: "max",
 		},
-	}, nil, sessionStore, planStore, flowStore)
+	}, nil, sessionStore, planStore, testFlowClient{store: flowStore})
 
 	if opts.CodexReasoningEffort != "high" || opts.ClaudeReasoningEffort != "max" {
 		t.Fatalf("reasoning efforts = codex %q claude %q, want high/max", opts.CodexReasoningEffort, opts.ClaudeReasoningEffort)
@@ -727,7 +772,7 @@ func TestModelOptionsFromConfigMapsDefaultView(t *testing.T) {
 			sessionStore, planStore, flowStore := testArtifactStores(t)
 			opts := modelOptionsFromConfig(config.Config{
 				UI: config.UIConfig{DefaultView: tt.view},
-			}, nil, sessionStore, planStore, flowStore)
+			}, nil, sessionStore, planStore, testFlowClient{store: flowStore})
 
 			if opts.StartupMode != tt.want {
 				t.Fatalf("StartupMode = %v, want %v", opts.StartupMode, tt.want)
@@ -762,7 +807,7 @@ func TestModelOptionsFromConfigPassesTerminalCommandToLaunchers(t *testing.T) {
 	opts := modelOptionsFromConfig(config.Config{
 		Agent:    config.AgentConfig{Command: "codex"},
 		Terminal: config.TerminalConfig{Command: terminalCommand + " --reuse"},
-	}, nil, sessionStore, planStore, flowStore)
+	}, nil, sessionStore, planStore, testFlowClient{store: flowStore})
 
 	terminalLaunch, err := opts.LaunchTerminal("/repo/worktree")
 	if err != nil {
@@ -843,7 +888,7 @@ func TestModelOptionsFromConfigTerminalEnvOverridesConfiguredCommand(t *testing.
 
 	opts := modelOptionsFromConfig(config.Config{
 		Terminal: config.TerminalConfig{Command: configTerminal},
-	}, nil, sessionStore, planStore, flowStore)
+	}, nil, sessionStore, planStore, testFlowClient{store: flowStore})
 
 	launch, err := opts.LaunchTerminal("/repo/worktree")
 	if err != nil {
@@ -873,7 +918,7 @@ func TestModelOptionsFromConfigPassesEditorCommandToEditFile(t *testing.T) {
 
 	opts := modelOptionsFromConfig(config.Config{
 		Editor: config.EditorConfig{Command: editorCommand + " --wait"},
-	}, nil, sessionStore, planStore, flowStore)
+	}, nil, sessionStore, planStore, testFlowClient{store: flowStore})
 
 	launch, err := opts.EditFile("/state/plans/plan-1/plan.md")
 	if err != nil {
@@ -914,7 +959,7 @@ func TestModelOptionsFromConfigPassesFlowPromptTemplates(t *testing.T) {
 			Merge:          "merge",
 			Generic:        "generic",
 		},
-	}, nil, sessionStore, planStore, flowStore)
+	}, nil, sessionStore, planStore, testFlowClient{store: flowStore})
 
 	want := model.FlowPromptTemplates{
 		Plan:           "plan",
@@ -1151,6 +1196,218 @@ func TestRunSessionHookEnvStateRootOverridesConfig(t *testing.T) {
 	if matches, err := filepath.Glob(filepath.Join(configRoot, "sessions", "codex", "*", "meta.json")); err != nil || len(matches) != 0 {
 		t.Fatalf("expected no metadata under config root, matches=%#v err=%v", matches, err)
 	}
+}
+
+func TestModelOptionsStartFlowPlanRejectsCodexApp(t *testing.T) {
+	sessionStore, planStore, _ := testArtifactStores(t)
+	client := &capturingStartFlowClient{}
+	opts := modelOptionsFromConfig(config.Config{Agent: config.AgentConfig{Command: "codex-app"}}, nil, sessionStore, planStore, client)
+
+	_, err := opts.StartFlowPlan(model.FlowStartRequest{
+		RepoPath:     "/dev/alpha",
+		Title:        "Codex App Flow",
+		Instructions: "Write the plan",
+		BaseRef:      "main",
+		AgentCommand: "codex-app",
+		PlanPhaseID:  "plan",
+	})
+	if err == nil || !strings.Contains(err.Error(), "codex-app cannot run Flow phases") {
+		t.Fatalf("StartFlowPlan error = %v, want codex-app rejection", err)
+	}
+	if client.called {
+		t.Fatalf("codex-app Plan Now must not create a flow: %#v", client.input)
+	}
+}
+
+func TestModelOptionsStartFlowPlanRejectsInteractiveDaemonRuntime(t *testing.T) {
+	sessionStore, planStore, _ := testArtifactStores(t)
+	client := &capturingStartFlowClient{}
+	opts := modelOptionsFromConfig(config.Config{Agent: config.AgentConfig{Command: "codex"}}, nil, sessionStore, planStore, client)
+
+	_, err := opts.StartFlowPlan(model.FlowStartRequest{
+		RepoPath:     "/dev/alpha",
+		Title:        "Interactive Flow",
+		Instructions: "Write the plan",
+		AgentCommand: "codex",
+		Headless:     false,
+		PlanPhaseID:  "plan",
+	})
+	if err == nil || !strings.Contains(err.Error(), "interactive daemon Flow launches are not supported") {
+		t.Fatalf("StartFlowPlan error = %v, want interactive unsupported error", err)
+	}
+	if client.called {
+		t.Fatalf("StartFlow should not be called for interactive daemon runtime: %#v", client.input)
+	}
+}
+
+func TestModelOptionsStartFlowPlanReturnsDaemonLaunchError(t *testing.T) {
+	sessionStore, planStore, _ := testArtifactStores(t)
+	client := &capturingStartFlowClient{
+		result: daemonclient.StartFlowResult{
+			Flow:        flowstore.FlowRecord{FlowID: "flow-1", RepoPath: "/dev/alpha"},
+			LaunchID:    "launch-1",
+			LaunchError: "runtime unavailable",
+		},
+	}
+	opts := modelOptionsFromConfig(config.Config{Agent: config.AgentConfig{Command: "codex"}}, nil, sessionStore, planStore, client)
+
+	result, err := opts.StartFlowPlan(model.FlowStartRequest{
+		RepoPath:     "/dev/alpha",
+		Title:        "Launch Error Flow",
+		Instructions: "Write the plan",
+		AgentCommand: "codex",
+		Headless:     true,
+		PlanPhaseID:  "plan",
+	})
+	if err == nil || !strings.Contains(err.Error(), "runtime unavailable") {
+		t.Fatalf("StartFlowPlan error = %v, want daemon launch error", err)
+	}
+	if result.Flow.FlowID != "flow-1" || result.LaunchID != "launch-1" || !result.DaemonLaunched {
+		t.Fatalf("result = %#v, want flow metadata preserved with daemon handled flag", result)
+	}
+}
+
+func TestModelOptionsStartFlowPlanReturnsBlockedPlanError(t *testing.T) {
+	sessionStore, planStore, _ := testArtifactStores(t)
+	client := &capturingStartFlowClient{
+		result: daemonclient.StartFlowResult{Flow: flowstore.FlowRecord{
+			FlowID:   "flow-1",
+			RepoPath: "/dev/alpha",
+			Phases: []flowstore.FlowPhase{{
+				PhaseID: "plan",
+				Status:  flowstore.PhaseBlocked,
+				Notes:   "Bootstrap hook failed: missing env file",
+			}},
+		}},
+	}
+	opts := modelOptionsFromConfig(config.Config{Agent: config.AgentConfig{Command: "codex"}}, nil, sessionStore, planStore, client)
+
+	result, err := opts.StartFlowPlan(model.FlowStartRequest{
+		RepoPath:     "/dev/alpha",
+		Title:        "Blocked Flow",
+		Instructions: "Write the plan",
+		AgentCommand: "codex",
+		Headless:     true,
+		PlanPhaseID:  "plan",
+	})
+	if err == nil || !strings.Contains(err.Error(), "Bootstrap hook failed") {
+		t.Fatalf("StartFlowPlan error = %v, want blocked plan detail", err)
+	}
+	if result.Flow.FlowID != "flow-1" || !result.DaemonLaunched {
+		t.Fatalf("result = %#v, want recoverable blocked flow metadata", result)
+	}
+}
+
+func TestModelOptionsCreateFlowReturnsBlockedPlanError(t *testing.T) {
+	sessionStore, planStore, _ := testArtifactStores(t)
+	client := &capturingStartFlowClient{
+		result: daemonclient.StartFlowResult{Flow: flowstore.FlowRecord{
+			FlowID:   "flow-1",
+			RepoPath: "/dev/alpha",
+			Phases: []flowstore.FlowPhase{{
+				PhaseID: "plan",
+				Status:  flowstore.PhaseBlocked,
+				Summary: "Worktree creation failed.",
+			}},
+		}},
+	}
+	opts := modelOptionsFromConfig(config.Config{Agent: config.AgentConfig{Command: "codex"}}, nil, sessionStore, planStore, client)
+
+	result, err := opts.CreateFlow(model.FlowStartRequest{
+		RepoPath:     "/dev/alpha",
+		Title:        "Blocked Flow",
+		Instructions: "Park it",
+	})
+	if err == nil || !strings.Contains(err.Error(), "Worktree creation failed") {
+		t.Fatalf("CreateFlow error = %v, want blocked plan detail", err)
+	}
+	if result.Flow.FlowID != "flow-1" || !result.DaemonLaunched {
+		t.Fatalf("result = %#v, want recoverable blocked flow metadata", result)
+	}
+}
+
+func TestModelOptionsLaunchFlowPhaseRejectsInteractiveDaemonRuntime(t *testing.T) {
+	sessionStore, planStore, _ := testArtifactStores(t)
+	client := &capturingStartFlowClient{
+		launchResult: daemonclient.LaunchFlowPhaseResult{
+			FlowID:   "flow-1",
+			PhaseID:  "implementation",
+			LaunchID: "launch-1",
+		},
+	}
+	opts := modelOptionsFromConfig(config.Config{Agent: config.AgentConfig{Command: "codex"}}, nil, sessionStore, planStore, client)
+
+	_, err := opts.LaunchFlowPhase(model.DaemonFlowPhaseLaunchRequest{
+		FlowID:     "flow-1",
+		PhaseID:    "implementation",
+		Headless:   false,
+		AutoLaunch: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "interactive daemon Flow launches are not supported") {
+		t.Fatalf("LaunchFlowPhase error = %v, want interactive unsupported error", err)
+	}
+	if client.launchInput.FlowID != "" {
+		t.Fatalf("LaunchFlowPhase should not be called for interactive daemon runtime: %#v", client.launchInput)
+	}
+}
+
+func TestModelOptionsAddFlowPhaseLaunchIDUsesDaemonClient(t *testing.T) {
+	sessionStore, planStore, _ := testArtifactStores(t)
+	client := &capturingStartFlowClient{
+		addLaunchRecord: flowstore.FlowRecord{
+			FlowID: "flow-1",
+			Phases: []flowstore.FlowPhase{{
+				PhaseID:   "implementation",
+				Status:    flowstore.PhaseCompleted,
+				LaunchIDs: []string{"resume-1"},
+			}},
+		},
+	}
+	opts := modelOptionsFromConfig(config.Config{Agent: config.AgentConfig{Command: "codex"}}, nil, sessionStore, planStore, client)
+
+	record, err := opts.AddFlowPhaseLaunchID(flowstore.PhaseLaunchUpdate{
+		FlowID:   "flow-1",
+		PhaseID:  "implementation",
+		LaunchID: "resume-1",
+		Resume:   true,
+	})
+	if err != nil {
+		t.Fatalf("AddFlowPhaseLaunchID: %v", err)
+	}
+	if record.FlowID != "flow-1" || client.addLaunchInput.FlowID != "flow-1" ||
+		client.addLaunchInput.PhaseID != "implementation" ||
+		client.addLaunchInput.LaunchID != "resume-1" ||
+		!client.addLaunchInput.Resume {
+		t.Fatalf("record = %#v input = %#v, want daemon-backed resume launch update", record, client.addLaunchInput)
+	}
+}
+
+type capturingStartFlowClient struct {
+	daemonclient.FlowClient
+	called          bool
+	input           daemonclient.StartFlowInput
+	result          daemonclient.StartFlowResult
+	launchInput     daemonclient.LaunchFlowPhaseInput
+	launchResult    daemonclient.LaunchFlowPhaseResult
+	addLaunchInput  flowstore.PhaseLaunchUpdate
+	addLaunchRecord flowstore.FlowRecord
+	addLaunchPhase  flowstore.FlowPhase
+}
+
+func (c *capturingStartFlowClient) StartFlow(_ context.Context, input daemonclient.StartFlowInput) (daemonclient.StartFlowResult, error) {
+	c.called = true
+	c.input = input
+	return c.result, nil
+}
+
+func (c *capturingStartFlowClient) LaunchFlowPhase(_ context.Context, input daemonclient.LaunchFlowPhaseInput) (daemonclient.LaunchFlowPhaseResult, error) {
+	c.launchInput = input
+	return c.launchResult, nil
+}
+
+func (c *capturingStartFlowClient) AddFlowPhaseLaunchID(_ context.Context, input flowstore.PhaseLaunchUpdate) (flowstore.FlowRecord, flowstore.FlowPhase, error) {
+	c.addLaunchInput = input
+	return c.addLaunchRecord, c.addLaunchPhase, nil
 }
 
 func singleSessionFile(t *testing.T, root, provider, name string) string {

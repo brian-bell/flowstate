@@ -486,6 +486,7 @@ func (m Model) createFlowAndLaunchPlanForRepo(repoPath, title, instructions, bas
 			BaseRef:                     baseRef,
 			AgentCommand:                command,
 			ReasoningEffort:             reasoningEffort,
+			Headless:                    headless,
 			SessionStateRoot:            m.sessionStateRoot,
 			FlowPromptTemplates:         m.flowPromptTemplates,
 			FlowPromptTemplatesProvided: true,
@@ -495,6 +496,9 @@ func (m Model) createFlowAndLaunchPlanForRepo(repoPath, title, instructions, bas
 		})
 		if err != nil {
 			return FlowCreateFailedMsg{RepoPath: repoPath, FlowID: result.Flow.FlowID, Title: title, Err: err.Error()}
+		}
+		if result.DaemonLaunched {
+			return FlowCreatedMsg{RepoPath: repoPath, FlowID: result.Flow.FlowID, Title: title}
 		}
 		return flowPlanLaunchMessage(result.LaunchContext, headless)
 	}

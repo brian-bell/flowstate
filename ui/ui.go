@@ -297,6 +297,7 @@ type RenderParams struct {
 	FlowReasoningEffort         string
 	DefaultViewLabel            string
 	FlowNextLaunchReady         bool
+	FlowRuntimeCancelReady      bool
 	FlowPhaseResetReadySelected bool
 	FlowPhaseResumableSelected  bool
 	OverlayText                 string
@@ -522,6 +523,7 @@ func renderApplication(p RenderParams) string {
 		FlowReasoningEffort:         p.FlowReasoningEffort,
 		DefaultViewLabel:            p.DefaultViewLabel,
 		FlowNextLaunchReady:         p.FlowNextLaunchReady,
+		FlowRuntimeCancelReady:      p.FlowRuntimeCancelReady,
 		FlowPhaseResetReadySelected: p.FlowPhaseResetReadySelected,
 		FlowPhaseResumableSelected:  p.FlowPhaseResumableSelected,
 		TransientError:              p.TransientError,
@@ -799,6 +801,7 @@ type statusBarParams struct {
 	FlowReasoningEffort         string
 	DefaultViewLabel            string
 	FlowNextLaunchReady         bool
+	FlowRuntimeCancelReady      bool
 	FlowPhaseResetReadySelected bool
 	FlowPhaseResumableSelected  bool
 	TransientError              string
@@ -1298,7 +1301,9 @@ func flowShortcutSections(sp statusBarParams, actions, navigation, global []shor
 			if sp.FlowNextLaunchReady {
 				actions = append(actions, shortcutHint{Key: "g", Label: "launch next"})
 			}
-			if sp.FlowPhaseSelected && sp.FlowPhaseResetReadySelected {
+			if sp.FlowPhaseSelected && sp.FlowRuntimeCancelReady {
+				actions = append(actions, shortcutHint{Key: "x", Label: "cancel job"})
+			} else if sp.FlowPhaseSelected && sp.FlowPhaseResetReadySelected {
 				actions = append(actions, shortcutHint{Key: "x", Label: "reset ready"})
 			}
 			if !sp.FlowPhaseSelected && sp.FlowPlanLinked {
