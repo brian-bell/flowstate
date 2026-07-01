@@ -591,24 +591,35 @@ func modelOptionsFromConfig(cfg config.Config, scanRepos func() ([]scanner.Repo,
 				if !flowlaunch.PhaseCanLaunch(result.Flow, phase) {
 					return model.FlowStartResult{Flow: result.Flow, DaemonLaunched: true}, nil
 				}
+				// codex-app opens externally and cannot carry flowstate launch
+				// metadata, but the launch bookkeeping is still recorded so the
+				// plan phase is marked launched and cannot be relaunched.
 				launchID := uuid.NewString()
+				launchedFlow, launchedPhase, err := flowClient.AddFlowPhaseLaunchID(context.Background(), flowstore.PhaseLaunchUpdate{
+					FlowID:   result.Flow.FlowID,
+					PhaseID:  phase.PhaseID,
+					LaunchID: launchID,
+				})
+				if err != nil {
+					return model.FlowStartResult{Flow: result.Flow, DaemonLaunched: true}, err
+				}
 				return model.FlowStartResult{
-					Flow:     result.Flow,
+					Flow:     launchedFlow,
 					LaunchID: launchID,
 					LaunchContext: actions.AgentLaunchContext{
 						Command:          agent.CommandCodexApp,
 						LaunchID:         launchID,
-						RepoPath:         result.Flow.RepoPath,
-						WorktreePath:     result.Flow.WorktreePath,
-						Branch:           result.Flow.Branch,
-						Commit:           result.Flow.Commit,
+						RepoPath:         launchedFlow.RepoPath,
+						WorktreePath:     launchedFlow.WorktreePath,
+						Branch:           launchedFlow.Branch,
+						Commit:           launchedFlow.Commit,
 						SessionStateRoot: sessionStore.Root(),
 						PlanPhaseID:      phaseID,
 						PlanPhaseTitle:   req.PlanPhaseTitle,
 						PlanPhaseStatus:  req.PlanPhaseStatus,
-						FlowID:           result.Flow.FlowID,
-						FlowPhaseID:      phase.PhaseID,
-						InitialPrompt:    flowlaunch.PhasePrompt(result.Flow, phase, result.Flow.PlanPath, "", flowLaunchPromptTemplatesFromConfig(cfg)),
+						FlowID:           launchedFlow.FlowID,
+						FlowPhaseID:      launchedPhase.PhaseID,
+						InitialPrompt:    flowlaunch.PhasePrompt(launchedFlow, launchedPhase, launchedFlow.PlanPath, "", flowLaunchPromptTemplatesFromConfig(cfg)),
 					},
 				}, nil
 			}

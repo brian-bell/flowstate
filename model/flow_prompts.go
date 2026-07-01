@@ -21,10 +21,6 @@ func flowPhasePrompt(record flowstore.FlowRecord, phase flowstore.FlowPhase, pla
 	return flowlaunch.PhasePrompt(record, phase, planPath, planBody, templates)
 }
 
-func flowPhasePromptNeedsPlanBody(phaseID string) bool {
-	return flowlaunch.PromptNeedsPlanBody(phaseID)
-}
-
 func flowPlanPrompt(record flowstore.FlowRecord, templates FlowPromptTemplates) string {
 	return flowlaunch.PlanPrompt(record, templates)
 }

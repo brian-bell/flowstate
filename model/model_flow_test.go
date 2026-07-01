@@ -6520,13 +6520,19 @@ func TestModel_FlowEmbeddedTerminalTinyAllocationClampsPTYSize(t *testing.T) {
 
 func TestModel_GOnFlowPhaseWithCodexAppUsesExternalLaunchRoute(t *testing.T) {
 	var launched actions.AgentLaunchContext
+	var launchUpdate flowstore.PhaseLaunchUpdate
 	startEmbeddedRan := false
 	m := model.NewWithOptions(testRepos(), model.Options{
 		AgentCommand:     "codex-app",
 		SessionStateRoot: "/state/wtui/sessions/v1",
 		AddFlowPhaseLaunchID: func(update flowstore.PhaseLaunchUpdate) (flowstore.FlowRecord, error) {
-			t.Fatalf("codex-app daemon-mode launch should not persist launch locally: %#v", update)
-			return flowstore.FlowRecord{}, nil
+			launchUpdate = update
+			return flowstore.FlowRecord{
+				FlowID: update.FlowID,
+				Phases: []flowstore.FlowPhase{
+					{PhaseID: update.PhaseID, Title: "Plan", Status: flowstore.PhaseRunning},
+				},
+			}, nil
 		},
 		LaunchFlowPhase: func(req model.DaemonFlowPhaseLaunchRequest) (model.DaemonFlowPhaseLaunchResult, error) {
 			t.Fatalf("codex-app should use external app route, not daemon runtime launch: %#v", req)
@@ -6575,6 +6581,12 @@ func TestModel_GOnFlowPhaseWithCodexAppUsesExternalLaunchRoute(t *testing.T) {
 	}
 	if launched.ReasoningEffort != "" {
 		t.Fatalf("codex-app launch reasoning effort = %q, want empty", launched.ReasoningEffort)
+	}
+	if launchUpdate.FlowID != "flow-1" || launchUpdate.PhaseID != "plan" || launchUpdate.LaunchID == "" {
+		t.Fatalf("codex-app launch bookkeeping = %#v, want persisted plan launch", launchUpdate)
+	}
+	if launched.LaunchID != launchUpdate.LaunchID {
+		t.Fatalf("codex-app launch context ID = %q, recorded %q", launched.LaunchID, launchUpdate.LaunchID)
 	}
 }
 

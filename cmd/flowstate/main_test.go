@@ -1208,20 +1208,27 @@ func TestModelOptionsStartFlowPlanCreatesOnlyForCodexApp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewPlanStore: %v", err)
 	}
+	startedFlow := flowstore.FlowRecord{
+		FlowID:       "flow-1",
+		Title:        "Codex App Flow",
+		Instructions: "Write the plan",
+		RepoPath:     "/dev/alpha",
+		WorktreePath: "/dev/alpha-worktrees/flow-codex-app",
+		Branch:       "flow/codex-app",
+		Commit:       "abc123",
+		Status:       flowstore.StatusInProgress,
+		Phases: []flowstore.FlowPhase{
+			{PhaseID: "plan", Title: "Plan", Status: flowstore.PhaseReady, Order: 1},
+		},
+	}
+	launchedFlow := startedFlow
+	launchedFlow.Phases = []flowstore.FlowPhase{
+		{PhaseID: "plan", Title: "Plan", Status: flowstore.PhaseRunning, Order: 1},
+	}
 	client := &capturingStartFlowClient{
-		result: daemonclient.StartFlowResult{Flow: flowstore.FlowRecord{
-			FlowID:       "flow-1",
-			Title:        "Codex App Flow",
-			Instructions: "Write the plan",
-			RepoPath:     "/dev/alpha",
-			WorktreePath: "/dev/alpha-worktrees/flow-codex-app",
-			Branch:       "flow/codex-app",
-			Commit:       "abc123",
-			Status:       flowstore.StatusInProgress,
-			Phases: []flowstore.FlowPhase{
-				{PhaseID: "plan", Title: "Plan", Status: flowstore.PhaseReady, Order: 1},
-			},
-		}},
+		result:          daemonclient.StartFlowResult{Flow: startedFlow},
+		addLaunchRecord: launchedFlow,
+		addLaunchPhase:  launchedFlow.Phases[0],
 	}
 	opts := modelOptionsFromConfig(config.Config{Agent: config.AgentConfig{Command: "codex-app"}}, nil, sessionStore, planStore, client)
 
@@ -1244,6 +1251,14 @@ func TestModelOptionsStartFlowPlanCreatesOnlyForCodexApp(t *testing.T) {
 	}
 	if result.DaemonLaunched {
 		t.Fatal("codex-app result should launch externally, not report daemon runtime launch")
+	}
+	if client.addLaunchInput.FlowID != "flow-1" ||
+		client.addLaunchInput.PhaseID != "plan" ||
+		client.addLaunchInput.LaunchID == "" {
+		t.Fatalf("AddFlowPhaseLaunchID input = %#v, want recorded plan launch", client.addLaunchInput)
+	}
+	if result.LaunchID != client.addLaunchInput.LaunchID {
+		t.Fatalf("result launch ID = %q, recorded %q", result.LaunchID, client.addLaunchInput.LaunchID)
 	}
 	ctx := result.LaunchContext
 	if ctx.Command != "codex-app" ||
