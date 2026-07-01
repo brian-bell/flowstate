@@ -1198,79 +1198,24 @@ func TestRunSessionHookEnvStateRootOverridesConfig(t *testing.T) {
 	}
 }
 
-func TestModelOptionsStartFlowPlanCreatesOnlyForCodexApp(t *testing.T) {
-	root := t.TempDir()
-	sessionStore, err := sessions.NewStore(sessions.StoreOptions{Root: root})
-	if err != nil {
-		t.Fatalf("NewStore: %v", err)
-	}
-	planStore, err := planstore.NewStore(planstore.StoreOptions{Root: root})
-	if err != nil {
-		t.Fatalf("NewPlanStore: %v", err)
-	}
-	startedFlow := flowstore.FlowRecord{
-		FlowID:       "flow-1",
-		Title:        "Codex App Flow",
-		Instructions: "Write the plan",
-		RepoPath:     "/dev/alpha",
-		WorktreePath: "/dev/alpha-worktrees/flow-codex-app",
-		Branch:       "flow/codex-app",
-		Commit:       "abc123",
-		Status:       flowstore.StatusInProgress,
-		Phases: []flowstore.FlowPhase{
-			{PhaseID: "plan", Title: "Plan", Status: flowstore.PhaseReady, Order: 1},
-		},
-	}
-	launchedFlow := startedFlow
-	launchedFlow.Phases = []flowstore.FlowPhase{
-		{PhaseID: "plan", Title: "Plan", Status: flowstore.PhaseRunning, Order: 1},
-	}
-	client := &capturingStartFlowClient{
-		result:          daemonclient.StartFlowResult{Flow: startedFlow},
-		addLaunchRecord: launchedFlow,
-		addLaunchPhase:  launchedFlow.Phases[0],
-	}
+func TestModelOptionsStartFlowPlanRejectsCodexApp(t *testing.T) {
+	sessionStore, planStore, _ := testArtifactStores(t)
+	client := &capturingStartFlowClient{}
 	opts := modelOptionsFromConfig(config.Config{Agent: config.AgentConfig{Command: "codex-app"}}, nil, sessionStore, planStore, client)
 
-	result, err := opts.StartFlowPlan(model.FlowStartRequest{
-		RepoPath:         "/dev/alpha",
-		Title:            "Codex App Flow",
-		Instructions:     "Write the plan",
-		BaseRef:          "main",
-		AgentCommand:     "codex-app",
-		SessionStateRoot: root,
-		PlanPhaseID:      "plan",
-		PlanPhaseTitle:   "Plan",
-		PlanPhaseStatus:  flowstore.PhaseRunning,
+	_, err := opts.StartFlowPlan(model.FlowStartRequest{
+		RepoPath:     "/dev/alpha",
+		Title:        "Codex App Flow",
+		Instructions: "Write the plan",
+		BaseRef:      "main",
+		AgentCommand: "codex-app",
+		PlanPhaseID:  "plan",
 	})
-	if err != nil {
-		t.Fatalf("StartFlowPlan: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "codex-app cannot run Flow phases") {
+		t.Fatalf("StartFlowPlan error = %v, want codex-app rejection", err)
 	}
-	if !client.called || client.input.LaunchPlan {
-		t.Fatalf("StartFlow input = %#v, want create-only daemon call for codex-app", client.input)
-	}
-	if result.DaemonLaunched {
-		t.Fatal("codex-app result should launch externally, not report daemon runtime launch")
-	}
-	if client.addLaunchInput.FlowID != "flow-1" ||
-		client.addLaunchInput.PhaseID != "plan" ||
-		client.addLaunchInput.LaunchID == "" {
-		t.Fatalf("AddFlowPhaseLaunchID input = %#v, want recorded plan launch", client.addLaunchInput)
-	}
-	if result.LaunchID != client.addLaunchInput.LaunchID {
-		t.Fatalf("result launch ID = %q, recorded %q", result.LaunchID, client.addLaunchInput.LaunchID)
-	}
-	ctx := result.LaunchContext
-	if ctx.Command != "codex-app" ||
-		ctx.FlowID != "flow-1" ||
-		ctx.FlowPhaseID != "plan" ||
-		ctx.WorktreePath != "/dev/alpha-worktrees/flow-codex-app" ||
-		ctx.LaunchID == "" ||
-		ctx.FlowLaunchTracked {
-		t.Fatalf("launch context = %#v, want external codex-app flow plan launch", ctx)
-	}
-	if !strings.Contains(ctx.InitialPrompt, "Write the plan") {
-		t.Fatalf("initial prompt = %q, want flow instructions", ctx.InitialPrompt)
+	if client.called {
+		t.Fatalf("codex-app Plan Now must not create a flow: %#v", client.input)
 	}
 }
 

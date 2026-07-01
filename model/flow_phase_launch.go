@@ -11,6 +11,11 @@ import (
 	"github.com/brian-bell/flowstate/internal/artifacts"
 )
 
+// flowLaunchCodexAppUnsupported is shown when a Flow phase launch is attempted
+// with codex-app selected. codex-app opens the external macOS app and cannot
+// run Flow phases, which execute headless as daemon runtime jobs.
+const flowLaunchCodexAppUnsupported = "codex-app cannot run Flow phases; press A to choose codex or claude"
+
 type FlowPhaseLaunchRoute = flowlaunch.Route
 
 const (
@@ -169,22 +174,17 @@ func (m Model) flowPhaseLaunchTarget(req FlowPhaseLaunchRequest) (flowPhaseLaunc
 
 func (m Model) prepareFlowPhaseLaunch(target flowPhaseLaunchTarget) tea.Cmd {
 	return func() tea.Msg {
-		if m.launchFlowPhase != nil {
-			command, reasoningEffort := m.flowLaunchAgentSettings()
-			if command == agent.CommandCodexApp {
-				// codex-app launches externally and cannot run as a daemon
-				// runtime job, but the launch is still recorded through the
-				// local prepare path so the phase is marked launched and stale
-				// auto-launches are skipped.
-				result, err := m.flowPhaseLauncher().Prepare(target.FlowPhaseLaunchPreparedRequest)
-				if err != nil {
-					return ActionFailedMsg{RepoPath: target.RepoPath, Err: err.Error()}
-				}
-				if result.Skipped {
-					return nil
-				}
-				return m.flowPhaseLaunchMessage(result)
+		command, reasoningEffort := m.flowLaunchAgentSettings()
+		if command == agent.CommandCodexApp {
+			// codex-app runs as an external macOS app and cannot execute Flow
+			// phases (which run headless as daemon runtime jobs). Skip auto
+			// launches silently; surface a clear message for manual ones.
+			if target.AutoLaunch {
+				return nil
 			}
+			return ActionFailedMsg{RepoPath: target.RepoPath, Err: flowLaunchCodexAppUnsupported}
+		}
+		if m.launchFlowPhase != nil {
 			result, err := m.launchFlowPhase(DaemonFlowPhaseLaunchRequest{
 				FlowID:          target.Record.FlowID,
 				PhaseID:         target.Phase.PhaseID,

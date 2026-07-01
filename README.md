@@ -119,7 +119,8 @@ cannot be deleted with this action.
 Press `g` to launch the first launchable phase in the selected Flow's canonical
 phase order. This action uses the selected Flow, so a highlighted pending phase
 row can still launch an earlier ready sibling, and nothing is persisted when no
-phase is launchable. Press `y` to copy the selected Flow worktree path from
+phase is launchable. Flow phases require a CLI agent (`codex` or `claude`); with
+`codex-app` selected, `g` is rejected with a message to choose codex or claude. Press `y` to copy the selected Flow worktree path from
 either a Flow row or one of its expanded phase rows. Press `r` on an expanded
 phase row with an attached provider session to resume that session; CLI resumes
 are recorded as a fresh Flow phase launch attempt, while `codex-app` resumes
@@ -152,12 +153,15 @@ Creating a new Flow has its own default-on Headless checkbox for the initial Pla
 launch; uncheck it for an interactive initial Plan launch. That checkbox is
 ignored when Plan Now is off and does not change the selected-phase `h` setting.
 Manual phase launches, auto-launched phases, and new Flow Plan launches all use
-the configured agent and that agent's configured effort. Press `E` to choose the
+the configured agent and that agent's configured effort, and require a CLI agent
+(`codex` or `claude`): `codex-app` cannot run Flow phases, so a Flow `g`
+launch is rejected and a New Flow with Plan Now is blocked in the form while
+`codex-app` is selected. Press `E` to choose the
 selected CLI agent's reasoning effort; the shortcut pane shows the current value.
 Codex CLI launches use `--config model_reasoning_effort=<effort>`, Claude
 launches use `--effort <effort>`, and session resumes do not receive effort
-flags. `codex-app` always uses the external deep-link route and keeps
-app-side/default reasoning.
+flags. `codex-app` still opens standalone launches (`a`) and session resumes
+(`r`) via the external deep-link route and keeps app-side/default reasoning.
 
 Embedded headless output is readable terminal text, not raw JSON events: `codex
 exec` streams progress as it works, while `claude --print` prints its result when

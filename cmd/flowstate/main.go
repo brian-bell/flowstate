@@ -14,7 +14,6 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/google/uuid"
 
 	"github.com/brian-bell/flowstate/actions"
 	"github.com/brian-bell/flowstate/agent"
@@ -567,61 +566,10 @@ func modelOptionsFromConfig(cfg config.Config, scanRepos func() ([]scanner.Repo,
 		StartFlowPlan: func(req model.FlowStartRequest) (model.FlowStartResult, error) {
 			command := agent.Normalize(req.AgentCommand)
 			if command == agent.CommandCodexApp {
-				result, err := flowClient.StartFlow(context.Background(), daemonclient.StartFlowInput{
-					RepoPath:     req.RepoPath,
-					Title:        req.Title,
-					Instructions: req.Instructions,
-					BaseRef:      req.BaseRef,
-					LaunchPlan:   false,
-				})
-				if err != nil {
-					return model.FlowStartResult{}, err
-				}
-				if err := flowStartBlockedError(result.Flow); err != nil {
-					return model.FlowStartResult{Flow: result.Flow, DaemonLaunched: true}, err
-				}
-				phaseID := req.PlanPhaseID
-				if phaseID == "" {
-					phaseID = "plan"
-				}
-				phase, ok := flowlaunch.PhaseByID(result.Flow, phaseID)
-				if !ok {
-					return model.FlowStartResult{}, fmt.Errorf("phase %q not found in flow %q", phaseID, result.Flow.FlowID)
-				}
-				if !flowlaunch.PhaseCanLaunch(result.Flow, phase) {
-					return model.FlowStartResult{Flow: result.Flow, DaemonLaunched: true}, nil
-				}
-				// codex-app opens externally and cannot carry flowstate launch
-				// metadata, but the launch bookkeeping is still recorded so the
-				// plan phase is marked launched and cannot be relaunched.
-				launchID := uuid.NewString()
-				launchedFlow, launchedPhase, err := flowClient.AddFlowPhaseLaunchID(context.Background(), flowstore.PhaseLaunchUpdate{
-					FlowID:   result.Flow.FlowID,
-					PhaseID:  phase.PhaseID,
-					LaunchID: launchID,
-				})
-				if err != nil {
-					return model.FlowStartResult{Flow: result.Flow, DaemonLaunched: true}, err
-				}
-				return model.FlowStartResult{
-					Flow:     launchedFlow,
-					LaunchID: launchID,
-					LaunchContext: actions.AgentLaunchContext{
-						Command:          agent.CommandCodexApp,
-						LaunchID:         launchID,
-						RepoPath:         launchedFlow.RepoPath,
-						WorktreePath:     launchedFlow.WorktreePath,
-						Branch:           launchedFlow.Branch,
-						Commit:           launchedFlow.Commit,
-						SessionStateRoot: sessionStore.Root(),
-						PlanPhaseID:      phaseID,
-						PlanPhaseTitle:   req.PlanPhaseTitle,
-						PlanPhaseStatus:  req.PlanPhaseStatus,
-						FlowID:           launchedFlow.FlowID,
-						FlowPhaseID:      launchedPhase.PhaseID,
-						InitialPrompt:    flowlaunch.PhasePrompt(launchedFlow, launchedPhase, launchedFlow.PlanPath, "", flowLaunchPromptTemplatesFromConfig(cfg)),
-					},
-				}, nil
+				// codex-app runs as an external macOS app and cannot run Flow
+				// phases, which execute headless as daemon runtime jobs. Reject
+				// before creating a flow so no orphan record is left behind.
+				return model.FlowStartResult{}, fmt.Errorf("codex-app cannot run Flow phases; choose codex or claude")
 			}
 			if !req.Headless {
 				return model.FlowStartResult{}, fmt.Errorf("interactive daemon Flow launches are not supported; enable headless mode")

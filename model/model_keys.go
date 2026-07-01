@@ -1318,6 +1318,9 @@ func (m Model) validateFlowCreateForm(values modal.FormValues) error {
 	if values.Checked[flowCreatePlanNowField] && m.agentCommand == "" {
 		return fmt.Errorf("Press A to choose %s before launching a flow", ui.AgentInputPlaceholder)
 	}
+	if values.Checked[flowCreatePlanNowField] && agent.Normalize(m.agentCommand) == agent.CommandCodexApp {
+		return fmt.Errorf("%s, or uncheck Plan Now", flowLaunchCodexAppUnsupported)
+	}
 	return nil
 }
 
@@ -1522,6 +1525,10 @@ func (m Model) handleOpenAgent() (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleLaunchNextFlowPhase() (tea.Model, tea.Cmd) {
+	if agent.Normalize(m.agentCommand) == agent.CommandCodexApp {
+		m = m.setStatus(statusOther, flowLaunchCodexAppUnsupported)
+		return m, nil
+	}
 	target, ok, next := m.selectedFlowNextLaunchTarget()
 	if !ok {
 		return next, nil

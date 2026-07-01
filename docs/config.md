@@ -369,8 +369,11 @@ Plan launch. That checkbox does not change the selected-phase `h` setting.
 Press `E` to choose the configured CLI agent's reasoning effort for future
 launches; the shortcut pane shows the current value. Manual phase
 launches, auto-launched phases, and new Flow Plan launches all use the
-configured agent and that agent's configured effort.
-`codex-app` remains URL/deep-link based, launches externally, and uses
+configured agent and that agent's configured effort, and require a CLI agent:
+`codex-app` cannot run Flow phases, so Flow `g` launches are rejected and
+a New Flow with Plan Now is blocked while `codex-app` is selected.
+`codex-app` remains URL/deep-link based for its standalone launches and session
+resumes, launches externally, and uses
 app-side/default reasoning. Press `r` to resume an attached
 provider session from the selected phase row; CLI resumes open in runtime-only
 embedded PTYs in the flows pane, while `codex-app` resumes navigate externally.
@@ -655,8 +658,8 @@ headless provider commands (`codex exec` / `claude --print`) versus interactive
 provider commands (`codex` / `claude`) inside that embedded terminal. Flow
 phase-session resumes also run inside runtime-only embedded PTYs in the flows
 pane. Other non-Flow agent launches keep using their existing external terminal
-transport, and `codex-app` Flow launches and resumes keep using deep-link
-transport. `ctrl+] x` and quit cleanup terminate embedded terminals and kill
+transport, and `codex-app` standalone launches and resumes keep using deep-link
+transport (`codex-app` cannot run Flow phases). `ctrl+] x` and quit cleanup terminate embedded terminals and kill
 tmux sessions created by the current embedded launch; detached sessions are no
 longer owned by flowstate and are not terminated when flowstate exits. The TUI refuses to
 resume a stored session whose provider session ID is blank (it reports this in
