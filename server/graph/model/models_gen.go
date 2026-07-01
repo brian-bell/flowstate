@@ -121,8 +121,9 @@ type LaunchFlowPhaseInput struct {
 type LaunchFlowPhasePayload struct {
 	FlowID   string      `json:"flowId"`
 	PhaseID  string      `json:"phaseId"`
-	LaunchID string      `json:"launchId"`
-	Job      *RuntimeJob `json:"job"`
+	LaunchID *string     `json:"launchId,omitempty"`
+	Job      *RuntimeJob `json:"job,omitempty"`
+	Skipped  bool        `json:"skipped"`
 }
 
 type Merge struct {

@@ -97,8 +97,9 @@ input LaunchFlowPhaseInput {
 type LaunchFlowPhasePayload {
   flowId: ID!
   phaseId: ID!
-  launchId: ID!
-  job: RuntimeJob!
+  launchId: ID
+  job: RuntimeJob
+  skipped: Boolean!
 }
 
 input SetFlowPhaseStatusInput {

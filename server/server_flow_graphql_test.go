@@ -2091,7 +2091,7 @@ func TestHandlerGraphQLLaunchFlowPhaseStartsRuntimeJobAndMarksPhaseRunning(t *te
 		}`, map[string]any{"input": map[string]any{
 		"flowId":     record.FlowID,
 		"phaseId":    "implementation",
-		"headless":   false,
+		"headless":   true,
 		"autoLaunch": true,
 	}}, &out)
 	if len(out.Errors) != 0 {
@@ -2136,10 +2136,10 @@ func TestHandlerGraphQLLaunchFlowPhaseStartsRuntimeJobAndMarksPhaseRunning(t *te
 	if len(launched) != 1 ||
 		launched[0].Command != "codex" ||
 		launched[0].ReasoningEffort != "high" ||
-		launched[0].Headless ||
+		!launched[0].Headless ||
 		launched[0].Embedded ||
 		!strings.Contains(launched[0].InitialPrompt, "Use the commit skill before completing this phase.") {
-		t.Fatalf("launch context = %#v, want interactive codex implementation launch", launched)
+		t.Fatalf("launch context = %#v, want headless codex implementation launch", launched)
 	}
 
 	var query struct {
@@ -2172,6 +2172,123 @@ func TestHandlerGraphQLLaunchFlowPhaseStartsRuntimeJobAndMarksPhaseRunning(t *te
 	job := activeRuntimeJobForTest(query.Data.Flow.Phases, "implementation")
 	if job == nil || job.ID != payload.Job.ID || job.LaunchID != payload.LaunchID || job.Status != string(runtimejobs.StatusSucceeded) || !strings.Contains(job.LogTail, "done") {
 		t.Fatalf("active runtime job = %#v, want completed visible job", job)
+	}
+}
+
+func TestHandlerGraphQLLaunchFlowPhaseSkipsStaleAutoLaunch(t *testing.T) {
+	store, _ := newFlowGraphQLStore(t)
+	record := createGraphQLFlow(t, store, flowstore.FlowRecord{
+		FlowID:       "stale-auto-launch-flow",
+		Title:        "Stale Auto Launch Flow",
+		Instructions: "launch implementation",
+		RepoPath:     t.TempDir(),
+		WorktreePath: t.TempDir(),
+		Branch:       "flow/stale-auto",
+		Commit:       "abc123",
+	})
+	record, err := store.SetAutoMode(flowstore.AutoModeUpdate{FlowID: record.FlowID, Enabled: false})
+	if err != nil {
+		t.Fatalf("SetAutoMode disabled: %v", err)
+	}
+	record = completeGraphQLPhase(t, store, record.FlowID, "plan", flowstore.PhaseUpdate{Status: flowstore.PhaseCompleted})
+	record = completeGraphQLPhase(t, store, record.FlowID, "plan-review", flowstore.PhaseUpdate{Status: flowstore.PhaseCompleted, Outcome: flowstore.OutcomeApproved})
+	runtime := &capturingRuntimeProvider{}
+	handler := newFlowGraphQLHandlerWithOptions(t, server.HandlerOptions{
+		FlowStore:      store,
+		RuntimeJobs:    runtime,
+		RuntimeStarter: runtime,
+		AgentCommand:   "codex",
+		StateRoot:      t.TempDir(),
+	})
+
+	var out struct {
+		Data struct {
+			LaunchFlowPhase struct {
+				FlowID   string  `json:"flowId"`
+				PhaseID  string  `json:"phaseId"`
+				LaunchID *string `json:"launchId"`
+				Skipped  bool    `json:"skipped"`
+				Job      *struct {
+					ID string `json:"id"`
+				} `json:"job"`
+			} `json:"launchFlowPhase"`
+		} `json:"data"`
+		Errors []any `json:"errors"`
+	}
+	postGraphQL(t, handler, `mutation($input: LaunchFlowPhaseInput!) {
+		launchFlowPhase(input: $input) {
+			flowId
+			phaseId
+			launchId
+			skipped
+			job { id }
+		}
+	}`, map[string]any{"input": map[string]any{
+		"flowId":     record.FlowID,
+		"phaseId":    "implementation",
+		"autoLaunch": true,
+	}}, &out)
+	if len(out.Errors) != 0 {
+		t.Fatalf("GraphQL errors: %#v", out.Errors)
+	}
+	payload := out.Data.LaunchFlowPhase
+	if payload.FlowID != record.FlowID ||
+		payload.PhaseID != "implementation" ||
+		!payload.Skipped ||
+		payload.LaunchID != nil ||
+		payload.Job != nil {
+		t.Fatalf("payload = %#v, want skipped auto-launch without runtime job", payload)
+	}
+	if len(runtime.requests) != 0 {
+		t.Fatalf("runtime requests = %#v, want none for skipped auto-launch", runtime.requests)
+	}
+	updated, err := store.Read(record.FlowID)
+	if err != nil {
+		t.Fatalf("Read updated flow: %v", err)
+	}
+	if phase := phaseByIDForTest(updated, "implementation"); phase.Status != flowstore.PhaseReady || len(phase.LaunchIDs) != 0 {
+		t.Fatalf("implementation phase = %#v, want unchanged ready phase", phase)
+	}
+}
+
+func TestHandlerGraphQLLaunchFlowPhaseRejectsNonHeadlessDaemonRuntime(t *testing.T) {
+	store, _ := newFlowGraphQLStore(t)
+	record := createGraphQLFlow(t, store, flowstore.FlowRecord{
+		FlowID:       "interactive-daemon-flow",
+		Title:        "Interactive Daemon Flow",
+		Instructions: "launch implementation",
+		RepoPath:     t.TempDir(),
+		WorktreePath: t.TempDir(),
+		Branch:       "flow/interactive",
+		Commit:       "abc123",
+	})
+	record = completeGraphQLPhase(t, store, record.FlowID, "plan", flowstore.PhaseUpdate{Status: flowstore.PhaseCompleted})
+	record = completeGraphQLPhase(t, store, record.FlowID, "plan-review", flowstore.PhaseUpdate{Status: flowstore.PhaseCompleted, Outcome: flowstore.OutcomeApproved})
+	runtime := &capturingRuntimeProvider{}
+	handler := newFlowGraphQLHandlerWithOptions(t, server.HandlerOptions{
+		FlowStore:      store,
+		RuntimeJobs:    runtime,
+		RuntimeStarter: runtime,
+		AgentCommand:   "codex",
+		StateRoot:      t.TempDir(),
+	})
+
+	var out struct {
+		Data   any   `json:"data"`
+		Errors []any `json:"errors"`
+	}
+	postGraphQL(t, handler, `mutation($input: LaunchFlowPhaseInput!) {
+		launchFlowPhase(input: $input) { launchId skipped }
+	}`, map[string]any{"input": map[string]any{
+		"flowId":   record.FlowID,
+		"phaseId":  "implementation",
+		"headless": false,
+	}}, &out)
+	if !graphQLErrorsContain(out.Errors, "daemon runtime launches require headless mode") {
+		t.Fatalf("GraphQL errors = %#v, want non-headless daemon runtime rejection", out.Errors)
+	}
+	if len(runtime.requests) != 0 {
+		t.Fatalf("runtime requests = %#v, want none", runtime.requests)
 	}
 }
 

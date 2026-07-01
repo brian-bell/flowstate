@@ -112,6 +112,7 @@ type ComplexityRoot struct {
 		Job      func(childComplexity int) int
 		LaunchID func(childComplexity int) int
 		PhaseID  func(childComplexity int) int
+		Skipped  func(childComplexity int) int
 	}
 
 	Merge struct {
@@ -597,6 +598,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.LaunchFlowPhasePayload.PhaseID(childComplexity), true
+	case "LaunchFlowPhasePayload.skipped":
+		if e.ComplexityRoot.LaunchFlowPhasePayload.Skipped == nil {
+			break
+		}
+
+		return e.ComplexityRoot.LaunchFlowPhasePayload.Skipped(childComplexity), true
 
 	case "Merge.commit":
 		if e.ComplexityRoot.Merge.Commit == nil {
@@ -1228,8 +1235,9 @@ input LaunchFlowPhaseInput {
 type LaunchFlowPhasePayload {
   flowId: ID!
   phaseId: ID!
-  launchId: ID!
-  job: RuntimeJob!
+  launchId: ID
+  job: RuntimeJob
+  skipped: Boolean!
 }
 
 input SetFlowPhaseStatusInput {
@@ -1606,6 +1614,8 @@ func (ec *executionContext) childFields_LaunchFlowPhasePayload(ctx context.Conte
 		return ec.fieldContext_LaunchFlowPhasePayload_launchId(ctx, field)
 	case "job":
 		return ec.fieldContext_LaunchFlowPhasePayload_job(ctx, field)
+	case "skipped":
+		return ec.fieldContext_LaunchFlowPhasePayload_skipped(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type LaunchFlowPhasePayload", field.Name)
 }
@@ -3532,11 +3542,11 @@ func (ec *executionContext) _LaunchFlowPhasePayload_launchId(ctx context.Context
 			return obj.LaunchID, nil
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
-			return ec.marshalNID2string(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOID2ᚖstring(ctx, selections, v)
 		},
 		true,
-		true,
+		false,
 	)
 }
 func (ec *executionContext) fieldContext_LaunchFlowPhasePayload_launchId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -3556,10 +3566,10 @@ func (ec *executionContext) _LaunchFlowPhasePayload_job(ctx context.Context, fie
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *model.RuntimeJob) graphql.Marshaler {
-			return ec.marshalNRuntimeJob2ᚖgithubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐRuntimeJob(ctx, selections, v)
+			return ec.marshalORuntimeJob2ᚖgithubᚗcomᚋbrianᚑbellᚋflowstateᚋserverᚋgraphᚋmodelᚐRuntimeJob(ctx, selections, v)
 		},
 		true,
-		true,
+		false,
 	)
 }
 func (ec *executionContext) fieldContext_LaunchFlowPhasePayload_job(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -3573,6 +3583,29 @@ func (ec *executionContext) fieldContext_LaunchFlowPhasePayload_job(_ context.Co
 		},
 	}
 	return fc, nil
+}
+
+func (ec *executionContext) _LaunchFlowPhasePayload_skipped(ctx context.Context, field graphql.CollectedField, obj *model.LaunchFlowPhasePayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_LaunchFlowPhasePayload_skipped(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Skipped, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_LaunchFlowPhasePayload_skipped(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("LaunchFlowPhasePayload", field, false, false, errors.New("field of type Boolean does not have child fields"))
 }
 
 func (ec *executionContext) _Merge_status(ctx context.Context, field graphql.CollectedField, obj *model.Merge) (ret graphql.Marshaler) {
@@ -7748,11 +7781,16 @@ func (ec *executionContext) _LaunchFlowPhasePayload(ctx context.Context, sel ast
 			}
 		case "launchId":
 			out.Values[i] = ec._LaunchFlowPhasePayload_launchId(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
+			if out.Values[i] == graphql.RequiredNull {
 				out.Invalids++
 			}
 		case "job":
 			out.Values[i] = ec._LaunchFlowPhasePayload_job(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "skipped":
+			out.Values[i] = ec._LaunchFlowPhasePayload_skipped(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}

@@ -278,11 +278,20 @@ func (r *mutationResolver) LaunchFlowPhase(ctx context.Context, input model.Laun
 	if err != nil {
 		return nil, err
 	}
+	if launch.Skipped {
+		return &model.LaunchFlowPhasePayload{
+			FlowID:  record.FlowID,
+			PhaseID: phase.PhaseID,
+			Skipped: true,
+		}, nil
+	}
+	launchID := launch.Context.LaunchID
 	return &model.LaunchFlowPhasePayload{
 		FlowID:   record.FlowID,
 		PhaseID:  launch.Context.FlowPhaseID,
-		LaunchID: launch.Context.LaunchID,
+		LaunchID: &launchID,
 		Job:      runtimeJobSnapshotToGraphQL(launch.Snapshot),
+		Skipped:  false,
 	}, nil
 }
 

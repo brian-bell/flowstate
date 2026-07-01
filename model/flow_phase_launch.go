@@ -40,6 +40,7 @@ type DaemonFlowPhaseLaunchResult struct {
 	FlowID   string
 	PhaseID  string
 	LaunchID string
+	Skipped  bool
 }
 
 type FlowPhaseLauncher struct {
@@ -188,6 +189,9 @@ func (m Model) prepareFlowPhaseLaunch(target flowPhaseLaunchTarget) tea.Cmd {
 			})
 			if err != nil {
 				return ActionFailedMsg{RepoPath: target.RepoPath, Err: err.Error()}
+			}
+			if result.Skipped {
+				return nil
 			}
 			return FlowPhaseLaunchedMsg{
 				RepoPath:  target.RepoPath,

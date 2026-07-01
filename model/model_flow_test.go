@@ -8646,6 +8646,41 @@ func TestModel_AutoFlowLaunchPreservesDaemonLaunchFlags(t *testing.T) {
 	}
 }
 
+func TestModel_SkippedDaemonAutoFlowLaunchReturnsNoMessage(t *testing.T) {
+	previous := autoFlowWithPhaseStatuses(map[string]string{
+		"plan":           flowstore.PhaseCompleted,
+		"plan-review":    flowstore.PhaseRunning,
+		"implementation": flowstore.PhasePending,
+	})
+	current := autoFlowWithPhaseStatuses(map[string]string{
+		"plan":           flowstore.PhaseCompleted,
+		"plan-review":    flowstore.PhaseCompleted,
+		"implementation": flowstore.PhaseReady,
+	})
+	m := model.NewWithOptions(testRepos(), model.Options{
+		AgentCommand: "codex",
+		LaunchFlowPhase: func(req model.DaemonFlowPhaseLaunchRequest) (model.DaemonFlowPhaseLaunchResult, error) {
+			if !req.AutoLaunch {
+				t.Fatalf("daemon auto-launch request = %#v, want AutoLaunch true", req)
+			}
+			return model.DaemonFlowPhaseLaunchResult{Skipped: true}, nil
+		},
+	})
+	m = flowsInRightPane(t, m, []flowstore.FlowRecord{previous})
+
+	_, cmd := update(m, model.FlowResultMsg{
+		RepoPath:    "/dev/alpha",
+		Flows:       []flowstore.FlowRecord{current},
+		ListRequest: m.ListRequest(ui.ModeFlows),
+	})
+	if cmd == nil {
+		t.Fatal("Flow refresh should return daemon auto-launch command")
+	}
+	if msg := cmd(); msg != nil {
+		t.Fatalf("skipped daemon auto-launch returned %T, want nil", msg)
+	}
+}
+
 func TestModel_FlowAgentResultFailureMarksPlanReviewBlocked(t *testing.T) {
 	var phaseUpdate flowstore.PhaseUpdate
 	m := model.NewWithOptions(testRepos(), model.Options{

@@ -87,7 +87,38 @@ Most commands accept:
   --state-root PATH  Override the artifact state root after the leaf command.
 `
 
+// resolveFlowRoot applies the documented shared artifact-root precedence:
+// --state-root > FLOWSTATE_FLOW_STATE_ROOT > FLOWSTATE_PLAN_STATE_ROOT >
+// FLOWSTATE_SESSION_STATE_ROOT > [sessions].root from config >
+// flowstore.DefaultRoot().
+func resolveFlowRoot(stateRoot string, deps runDeps) (string, error) {
+	if stateRoot != "" {
+		return stateRoot, nil
+	}
+	if root := deps.getenv("FLOWSTATE_FLOW_STATE_ROOT"); root != "" {
+		return root, nil
+	}
+	if root := deps.getenv("FLOWSTATE_PLAN_STATE_ROOT"); root != "" {
+		return root, nil
+	}
+	if root := deps.getenv("FLOWSTATE_SESSION_STATE_ROOT"); root != "" {
+		return root, nil
+	}
+	cfg, err := deps.loadConfig()
+	if err != nil {
+		return "", fmt.Errorf("error loading config: %w", err)
+	}
+	if cfg.Sessions.Root != "" {
+		return cfg.Sessions.Root, nil
+	}
+	return flowstore.DefaultRoot()
+}
+
 func newFlowDaemonClient(deps runDeps, compatibilityStateRoot string) (daemonclient.FlowClient, error) {
+	root, err := resolveFlowRoot(compatibilityStateRoot, deps)
+	if err != nil {
+		return nil, err
+	}
 	newClient := deps.newFlowClient
 	if newClient == nil {
 		newClient = func(stateRoot string) (daemonclient.FlowClient, error) {
@@ -100,7 +131,7 @@ func newFlowDaemonClient(deps runDeps, compatibilityStateRoot string) (daemoncli
 			return daemonclient.New(opts)
 		}
 	}
-	client, err := newClient(compatibilityStateRoot)
+	client, err := newClient(root)
 	if err != nil {
 		return nil, fmt.Errorf("flow daemon unavailable: %w", err)
 	}

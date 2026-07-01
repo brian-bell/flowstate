@@ -101,7 +101,8 @@ type LaunchFlowPhaseResult struct {
 	FlowID   string
 	PhaseID  string
 	LaunchID string
-	Job      RuntimeJob
+	Job      *RuntimeJob
+	Skipped  bool
 }
 
 type LaunchFlowPhaseInput struct {
@@ -503,10 +504,11 @@ func (c *Client) LaunchFlowPhase(ctx context.Context, req LaunchFlowPhaseInput) 
 	}
 	var data struct {
 		LaunchFlowPhase struct {
-			FlowID   string     `json:"flowId"`
-			PhaseID  string     `json:"phaseId"`
-			LaunchID string     `json:"launchId"`
-			Job      RuntimeJob `json:"job"`
+			FlowID   string      `json:"flowId"`
+			PhaseID  string      `json:"phaseId"`
+			LaunchID *string     `json:"launchId"`
+			Job      *RuntimeJob `json:"job"`
+			Skipped  bool        `json:"skipped"`
 		} `json:"launchFlowPhase"`
 	}
 	if err := c.mutation(ctx, launchFlowPhaseMutation, map[string]any{"input": input}, &data); err != nil {
@@ -515,8 +517,9 @@ func (c *Client) LaunchFlowPhase(ctx context.Context, req LaunchFlowPhaseInput) 
 	return LaunchFlowPhaseResult{
 		FlowID:   data.LaunchFlowPhase.FlowID,
 		PhaseID:  data.LaunchFlowPhase.PhaseID,
-		LaunchID: data.LaunchFlowPhase.LaunchID,
+		LaunchID: derefString(data.LaunchFlowPhase.LaunchID),
 		Job:      data.LaunchFlowPhase.Job,
+		Skipped:  data.LaunchFlowPhase.Skipped,
 	}, nil
 }
 
@@ -528,6 +531,13 @@ func (c *Client) CancelRuntimeJob(ctx context.Context, jobID string) (RuntimeJob
 		return RuntimeJob{}, err
 	}
 	return data.CancelRuntimeJob, nil
+}
+
+func derefString(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 func (c *Client) query(ctx context.Context, query string, variables map[string]any, out any) error {
@@ -996,13 +1006,14 @@ const startFlowMutation = `mutation($input: StartFlowInput!) {
 }`
 
 const launchFlowPhaseMutation = `mutation($input: LaunchFlowPhaseInput!) {
-	launchFlowPhase(input: $input) {
-		flowId
-		phaseId
-		launchId
-		job {
-			id launchId flowId phaseId status createdAt startedAt endedAt exitCode
-			error phaseUpdateError logTail logTruncated
+		launchFlowPhase(input: $input) {
+			flowId
+			phaseId
+			launchId
+			skipped
+			job {
+				id launchId flowId phaseId status createdAt startedAt endedAt exitCode
+				error phaseUpdateError logTail logTruncated
 		}
 	}
 }`

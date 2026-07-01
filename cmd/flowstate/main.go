@@ -398,7 +398,11 @@ func startProgram(repos []scanner.Repo, opts startProgramOptions) error {
 	if err != nil {
 		return err
 	}
-	flowClient, err := daemonclient.New(daemonclient.Options{})
+	flowClient, err := daemonclient.New(daemonclient.Options{
+		Coords: func() (daemoncoords.Coords, error) {
+			return daemoncoords.ReadForStateRoot(artifactRoot)
+		},
+	})
 	if err != nil {
 		return err
 	}
@@ -540,6 +544,7 @@ func modelOptionsFromConfig(cfg config.Config, scanRepos func() ([]scanner.Repo,
 				FlowID:   result.FlowID,
 				PhaseID:  result.PhaseID,
 				LaunchID: result.LaunchID,
+				Skipped:  result.Skipped,
 			}, nil
 		},
 		CancelRuntimeJob: func(jobID string) (model.FlowRuntimeJob, error) {
