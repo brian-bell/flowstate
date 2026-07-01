@@ -1380,13 +1380,47 @@ func TestModelOptionsLaunchFlowPhaseRejectsInteractiveDaemonRuntime(t *testing.T
 	}
 }
 
+func TestModelOptionsAddFlowPhaseLaunchIDUsesDaemonClient(t *testing.T) {
+	sessionStore, planStore, _ := testArtifactStores(t)
+	client := &capturingStartFlowClient{
+		addLaunchRecord: flowstore.FlowRecord{
+			FlowID: "flow-1",
+			Phases: []flowstore.FlowPhase{{
+				PhaseID:   "implementation",
+				Status:    flowstore.PhaseCompleted,
+				LaunchIDs: []string{"resume-1"},
+			}},
+		},
+	}
+	opts := modelOptionsFromConfig(config.Config{Agent: config.AgentConfig{Command: "codex"}}, nil, sessionStore, planStore, client)
+
+	record, err := opts.AddFlowPhaseLaunchID(flowstore.PhaseLaunchUpdate{
+		FlowID:   "flow-1",
+		PhaseID:  "implementation",
+		LaunchID: "resume-1",
+		Resume:   true,
+	})
+	if err != nil {
+		t.Fatalf("AddFlowPhaseLaunchID: %v", err)
+	}
+	if record.FlowID != "flow-1" || client.addLaunchInput.FlowID != "flow-1" ||
+		client.addLaunchInput.PhaseID != "implementation" ||
+		client.addLaunchInput.LaunchID != "resume-1" ||
+		!client.addLaunchInput.Resume {
+		t.Fatalf("record = %#v input = %#v, want daemon-backed resume launch update", record, client.addLaunchInput)
+	}
+}
+
 type capturingStartFlowClient struct {
 	daemonclient.FlowClient
-	called       bool
-	input        daemonclient.StartFlowInput
-	result       daemonclient.StartFlowResult
-	launchInput  daemonclient.LaunchFlowPhaseInput
-	launchResult daemonclient.LaunchFlowPhaseResult
+	called          bool
+	input           daemonclient.StartFlowInput
+	result          daemonclient.StartFlowResult
+	launchInput     daemonclient.LaunchFlowPhaseInput
+	launchResult    daemonclient.LaunchFlowPhaseResult
+	addLaunchInput  flowstore.PhaseLaunchUpdate
+	addLaunchRecord flowstore.FlowRecord
+	addLaunchPhase  flowstore.FlowPhase
 }
 
 func (c *capturingStartFlowClient) StartFlow(_ context.Context, input daemonclient.StartFlowInput) (daemonclient.StartFlowResult, error) {
@@ -1398,6 +1432,11 @@ func (c *capturingStartFlowClient) StartFlow(_ context.Context, input daemonclie
 func (c *capturingStartFlowClient) LaunchFlowPhase(_ context.Context, input daemonclient.LaunchFlowPhaseInput) (daemonclient.LaunchFlowPhaseResult, error) {
 	c.launchInput = input
 	return c.launchResult, nil
+}
+
+func (c *capturingStartFlowClient) AddFlowPhaseLaunchID(_ context.Context, input flowstore.PhaseLaunchUpdate) (flowstore.FlowRecord, flowstore.FlowPhase, error) {
+	c.addLaunchInput = input
+	return c.addLaunchRecord, c.addLaunchPhase, nil
 }
 
 func singleSessionFile(t *testing.T, root, provider, name string) string {

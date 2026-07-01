@@ -585,6 +585,10 @@ func modelOptionsFromConfig(cfg config.Config, scanRepos func() ([]scanner.Repo,
 			record, _, err := flowClient.SetPhase(context.Background(), update)
 			return record, err
 		},
+		AddFlowPhaseLaunchID: func(update flowstore.PhaseLaunchUpdate) (flowstore.FlowRecord, error) {
+			record, _, err := flowClient.AddFlowPhaseLaunchID(context.Background(), update)
+			return record, err
+		},
 		ResetFlowPhase: func(update flowstore.PhaseResetUpdate) (flowstore.FlowRecord, error) {
 			record, _, err := flowClient.ResetFlowPhase(context.Background(), update)
 			return record, err

@@ -764,17 +764,17 @@ func (s *Store) AddPhaseLaunchID(update PhaseLaunchUpdate) (FlowRecord, error) {
 			return FlowRecord{}, fmt.Errorf("phase %q not found in flow %q", update.PhaseID, update.FlowID)
 		}
 		phase := record.Phases[phaseIndex]
+		if update.AutoLaunch {
+			if err := validateAutoPhaseLaunch(record, phase); err != nil {
+				return FlowRecord{}, err
+			}
+		}
 		if update.RejectRunning && !update.Resume {
 			if phase.Status == PhaseRunning {
 				return FlowRecord{}, fmt.Errorf("flow phase %q is already running", update.PhaseID)
 			}
 			if !phaseLaunchableForFreshStart(record, phase) {
 				return FlowRecord{}, fmt.Errorf("flow phase %q is not launchable from status %q", update.PhaseID, phase.Status)
-			}
-		}
-		if update.AutoLaunch {
-			if err := validateAutoPhaseLaunch(record, phase); err != nil {
-				return FlowRecord{}, err
 			}
 		}
 		if update.Resume && PhaseStatusTerminal(phase.Status) {

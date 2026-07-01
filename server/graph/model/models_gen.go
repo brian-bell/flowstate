@@ -23,6 +23,20 @@ type AddFlowChildPhasePayload struct {
 	Phase *FlowPhase `json:"phase"`
 }
 
+type AddFlowPhaseLaunchInput struct {
+	FlowID        string `json:"flowId"`
+	PhaseID       string `json:"phaseId"`
+	LaunchID      string `json:"launchId"`
+	Resume        *bool  `json:"resume,omitempty"`
+	AutoLaunch    *bool  `json:"autoLaunch,omitempty"`
+	RejectRunning *bool  `json:"rejectRunning,omitempty"`
+}
+
+type AddFlowPhaseLaunchPayload struct {
+	Flow  *Flow      `json:"flow"`
+	Phase *FlowPhase `json:"phase"`
+}
+
 type CreateFlowAndLaunchPlanInput struct {
 	RepoPath        string  `json:"repoPath"`
 	Title           string  `json:"title"`

@@ -172,6 +172,19 @@ func (c testFlowClient) DeleteFlow(ctx context.Context, flowID string) (string, 
 	return flowID, nil
 }
 
+func (c testFlowClient) AddFlowPhaseLaunchID(ctx context.Context, update flowstore.PhaseLaunchUpdate) (flowstore.FlowRecord, flowstore.FlowPhase, error) {
+	_ = ctx
+	record, err := c.store.AddPhaseLaunchID(update)
+	if err != nil {
+		return flowstore.FlowRecord{}, flowstore.FlowPhase{}, err
+	}
+	phase, ok := flowPhaseByID(record, update.PhaseID)
+	if !ok {
+		return flowstore.FlowRecord{}, flowstore.FlowPhase{}, fmt.Errorf("phase %q not found in updated flow %q", update.PhaseID, update.FlowID)
+	}
+	return record, phase, nil
+}
+
 func (c testFlowClient) StartFlow(ctx context.Context, input daemonclient.StartFlowInput) (daemonclient.StartFlowResult, error) {
 	record, err := c.CreateRawFlow(ctx, flowstore.FlowRecord{
 		RepoPath:     input.RepoPath,

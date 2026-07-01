@@ -382,6 +382,35 @@ func TestClientResetFlowPhaseRoundTripsThroughGraphQL(t *testing.T) {
 	}
 }
 
+func TestClientAddFlowPhaseLaunchIDRecordsResume(t *testing.T) {
+	store, url, _ := newClientGraphQLServerWithRoot(t, "test-token")
+	record := createClientFlow(t, store, flowstore.FlowRecord{
+		FlowID:       "resume-flow",
+		Title:        "Resume Flow",
+		Instructions: "resume instructions",
+		RepoPath:     t.TempDir(),
+	})
+	mustSetClientPhase(t, store, record.FlowID, "plan", flowstore.PhaseCompleted)
+	client, err := New(Options{EndpointURL: url, Token: "test-token"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	updated, phase, err := client.AddFlowPhaseLaunchID(context.Background(), flowstore.PhaseLaunchUpdate{
+		FlowID:   record.FlowID,
+		PhaseID:  "Plan",
+		LaunchID: "resume-launch",
+		Resume:   true,
+	})
+	if err != nil {
+		t.Fatalf("AddFlowPhaseLaunchID: %v", err)
+	}
+	if updated.FlowID != record.FlowID || phase.PhaseID != "plan" || phase.Status != flowstore.PhaseCompleted ||
+		len(phase.LaunchIDs) != 1 || phase.LaunchIDs[0] != "resume-launch" {
+		t.Fatalf("add launch result flow=%#v phase=%#v", updated, phase)
+	}
+}
+
 func TestClientMutationNotFoundErrorsClassifyAsFlowstoreNotFound(t *testing.T) {
 	_, url, root := newClientGraphQLServerWithRoot(t, "test-token")
 	client, err := New(Options{EndpointURL: url, Token: "test-token"})

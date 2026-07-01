@@ -67,6 +67,7 @@ type FlowClient interface {
 	SetFlowMerge(context.Context, flowstore.MergeUpdate) (flowstore.FlowRecord, flowstore.Merge, error)
 	SetFlowAutoMode(context.Context, flowstore.AutoModeUpdate) (flowstore.FlowRecord, error)
 	DeleteFlow(context.Context, string) (string, error)
+	AddFlowPhaseLaunchID(context.Context, flowstore.PhaseLaunchUpdate) (flowstore.FlowRecord, flowstore.FlowPhase, error)
 	StartFlow(context.Context, StartFlowInput) (StartFlowResult, error)
 	LaunchFlowPhase(context.Context, LaunchFlowPhaseInput) (LaunchFlowPhaseResult, error)
 	CancelRuntimeJob(context.Context, string) (RuntimeJob, error)
@@ -448,6 +449,27 @@ func (c *Client) DeleteFlow(ctx context.Context, flowID string) (string, error) 
 		return "", err
 	}
 	return data.DeleteFlow.DeletedID, nil
+}
+
+func (c *Client) AddFlowPhaseLaunchID(ctx context.Context, update flowstore.PhaseLaunchUpdate) (flowstore.FlowRecord, flowstore.FlowPhase, error) {
+	input := map[string]any{
+		"flowId":        update.FlowID,
+		"phaseId":       update.PhaseID,
+		"launchId":      update.LaunchID,
+		"resume":        update.Resume,
+		"autoLaunch":    update.AutoLaunch,
+		"rejectRunning": update.RejectRunning,
+	}
+	var data struct {
+		AddFlowPhaseLaunchID struct {
+			Flow  flowDTO      `json:"flow"`
+			Phase flowPhaseDTO `json:"phase"`
+		} `json:"addFlowPhaseLaunchID"`
+	}
+	if err := c.mutation(ctx, addFlowPhaseLaunchIDMutation, map[string]any{"input": input}, &data); err != nil {
+		return flowstore.FlowRecord{}, flowstore.FlowPhase{}, err
+	}
+	return data.AddFlowPhaseLaunchID.Flow.record(), data.AddFlowPhaseLaunchID.Phase.phase(), nil
 }
 
 func (c *Client) StartFlow(ctx context.Context, input StartFlowInput) (StartFlowResult, error) {
@@ -991,6 +1013,21 @@ const setFlowAutoModeMutation = `mutation($input: SetFlowAutoModeInput!) {
 
 const deleteFlowMutation = `mutation($id: ID!) {
 	deleteFlow(id: $id) { deletedId }
+}`
+
+const addFlowPhaseLaunchIDMutation = `mutation($input: AddFlowPhaseLaunchInput!) {
+	addFlowPhaseLaunchID(input: $input) {
+		flow { ` + flowFields + ` }
+		phase {
+			phaseId parentPhaseId title kind statusRaw order outcome notes summary launchIds
+			sessions { provider sessionId launchId status startedAt endedAt transcriptPath }
+			activeRuntimeJob {
+				id launchId flowId phaseId status createdAt startedAt endedAt exitCode
+				error phaseUpdateError logTail logTruncated
+			}
+			createdAt updatedAt
+		}
+	}
 }`
 
 const startFlowMutation = `mutation($input: StartFlowInput!) {

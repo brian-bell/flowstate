@@ -258,9 +258,6 @@ func (r *mutationResolver) LaunchFlowPhase(ctx context.Context, input model.Laun
 	if !ok {
 		return nil, fmt.Errorf("phase %q not found in flow %q", input.PhaseID, input.FlowID)
 	}
-	if !flowlaunch.PhaseCanLaunch(record, phase) {
-		return nil, fmt.Errorf("phase %q is not launchable from status %q", phase.PhaseID, phase.Status)
-	}
 	command, err := r.launchAgentCommand(input.AgentCommand)
 	if err != nil {
 		return nil, err
@@ -276,6 +273,9 @@ func (r *mutationResolver) LaunchFlowPhase(ctx context.Context, input model.Laun
 	autoLaunch := false
 	if input.AutoLaunch != nil {
 		autoLaunch = *input.AutoLaunch
+	}
+	if !autoLaunch && !flowlaunch.PhaseCanLaunch(record, phase) {
+		return nil, fmt.Errorf("phase %q is not launchable from status %q", phase.PhaseID, phase.Status)
 	}
 	launch, err := r.startFlowRuntimeJob(ctx, record, phase, command, reasoningEffort, headless, autoLaunch)
 	if err != nil {
@@ -296,6 +296,36 @@ func (r *mutationResolver) LaunchFlowPhase(ctx context.Context, input model.Laun
 		Job:      runtimeJobSnapshotToGraphQL(launch.Snapshot),
 		Skipped:  false,
 	}, nil
+}
+
+// AddFlowPhaseLaunchID is the resolver for the addFlowPhaseLaunchID field.
+func (r *mutationResolver) AddFlowPhaseLaunchID(ctx context.Context, input model.AddFlowPhaseLaunchInput) (*model.AddFlowPhaseLaunchPayload, error) {
+	if r.FlowStore == nil {
+		return nil, fmt.Errorf("flow store is not configured")
+	}
+	update := flowstore.PhaseLaunchUpdate{
+		FlowID:   input.FlowID,
+		PhaseID:  input.PhaseID,
+		LaunchID: input.LaunchID,
+	}
+	if input.Resume != nil {
+		update.Resume = *input.Resume
+	}
+	if input.AutoLaunch != nil {
+		update.AutoLaunch = *input.AutoLaunch
+	}
+	if input.RejectRunning != nil {
+		update.RejectRunning = *input.RejectRunning
+	}
+	record, err := r.FlowStore.AddPhaseLaunchID(update)
+	if err != nil {
+		return nil, fmt.Errorf("add flow phase launch %q/%q: %w", input.FlowID, input.PhaseID, err)
+	}
+	flow, phase, err := r.flowAndPhase(record, input.PhaseID)
+	if err != nil {
+		return nil, err
+	}
+	return &model.AddFlowPhaseLaunchPayload{Flow: flow, Phase: phase}, nil
 }
 
 // CancelRuntimeJob is the resolver for the cancelRuntimeJob field.
