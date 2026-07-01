@@ -97,6 +97,19 @@ func (c testFlowClient) SetPhase(ctx context.Context, update flowstore.PhaseUpda
 	return record, phase, nil
 }
 
+func (c testFlowClient) ResetFlowPhase(ctx context.Context, update flowstore.PhaseResetUpdate) (flowstore.FlowRecord, flowstore.FlowPhase, error) {
+	_ = ctx
+	record, err := c.store.ResetAwaitingSessionPhase(update)
+	if err != nil {
+		return flowstore.FlowRecord{}, flowstore.FlowPhase{}, err
+	}
+	phase, ok := flowPhaseByID(record, update.PhaseID)
+	if !ok {
+		return flowstore.FlowRecord{}, flowstore.FlowPhase{}, fmt.Errorf("phase %q not found in updated flow %q", update.PhaseID, update.FlowID)
+	}
+	return record, phase, nil
+}
+
 func (c testFlowClient) RestartFlowPhase(ctx context.Context, update flowstore.PhaseRestartUpdate) (flowstore.FlowRecord, flowstore.FlowPhase, error) {
 	_ = ctx
 	record, err := c.store.RestartPhase(update)

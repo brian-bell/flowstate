@@ -42,13 +42,6 @@ func (r *mutationResolver) CreateRawFlow(ctx context.Context, input model.RawFlo
 	return flowToGraphQL(view), nil
 }
 
-func optionalString(value *string) string {
-	if value == nil {
-		return ""
-	}
-	return *value
-}
-
 // CreateFlow is the resolver for the createFlow field.
 func (r *mutationResolver) CreateFlow(ctx context.Context, input model.CreateFlowInput) (*model.Flow, error) {
 	if r.FlowCreator == nil {
@@ -346,6 +339,25 @@ func (r *mutationResolver) SetFlowPhaseStatus(ctx context.Context, input model.S
 		}
 	}
 	return nil, fmt.Errorf("set flow phase status %q/%q: updated phase not found", input.FlowID, input.PhaseID)
+}
+
+// ResetFlowPhase is the resolver for the resetFlowPhase field.
+func (r *mutationResolver) ResetFlowPhase(ctx context.Context, input model.ResetFlowPhaseInput) (*model.ResetFlowPhasePayload, error) {
+	if r.FlowStore == nil {
+		return nil, fmt.Errorf("flow store is not configured")
+	}
+	record, err := r.FlowStore.ResetAwaitingSessionPhase(flowstore.PhaseResetUpdate{
+		FlowID:  input.FlowID,
+		PhaseID: input.PhaseID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("reset flow phase %q/%q: %w", input.FlowID, input.PhaseID, err)
+	}
+	flow, phase, err := r.flowAndPhase(record, input.PhaseID)
+	if err != nil {
+		return nil, err
+	}
+	return &model.ResetFlowPhasePayload{Flow: flow, Phase: phase}, nil
 }
 
 // RestartFlowPhase is the resolver for the restartFlowPhase field.

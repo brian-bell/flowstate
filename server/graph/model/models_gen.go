@@ -154,6 +154,16 @@ type RawFlowInput struct {
 	Commit       *string `json:"commit,omitempty"`
 }
 
+type ResetFlowPhaseInput struct {
+	FlowID  string `json:"flowId"`
+	PhaseID string `json:"phaseId"`
+}
+
+type ResetFlowPhasePayload struct {
+	Flow  *Flow      `json:"flow"`
+	Phase *FlowPhase `json:"phase"`
+}
+
 type RestartFlowPhaseInput struct {
 	FlowID  string  `json:"flowId"`
 	PhaseID string  `json:"phaseId"`

@@ -27,3 +27,10 @@ func (r *mutationResolver) flowAndPhase(record flowstore.FlowRecord, phaseID str
 	}
 	return nil, nil, fmt.Errorf("updated phase %q not found in flow %q", phaseID, record.FlowID)
 }
+
+func optionalString(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}

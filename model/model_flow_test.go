@@ -1468,6 +1468,185 @@ func TestModel_SelectedSessionMismatchFlowPhaseHidesResetShortcut(t *testing.T) 
 	}
 }
 
+func TestModel_FlowViewsRenderDaemonRuntimeJobLogTail(t *testing.T) {
+	flow := flowWithPhaseDetails()
+	flow.Phases[2].Status = flowstore.PhaseRunning
+	m := flowsInRightPane(t, model.New(testRepos()), []flowstore.FlowRecord{flow})
+	m, _ = update(m, model.FlowResultMsg{
+		RepoPath: "/dev/alpha",
+		Flows:    []flowstore.FlowRecord{flow},
+		FlowViews: []model.FlowView{{
+			Record: flow,
+			RuntimeJobs: map[string]model.FlowRuntimeJob{
+				"implementation": {
+					ID:           "job-1",
+					FlowID:       flow.FlowID,
+					PhaseID:      "implementation",
+					Status:       "running",
+					LogTail:      "daemon line 1\ndaemon line 2\n",
+					LogTruncated: true,
+				},
+			},
+		}},
+		ListRequest: m.ListRequest(ui.ModeFlows),
+	})
+	m = selectFlowPhaseByID(t, m, "implementation")
+
+	view := ansi.Strip(m.View())
+	for _, want := range []string{"daemon runtime running job-1", "daemon line 1", "daemon line 2", "[log truncated]"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("daemon runtime view missing %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestModel_FlowFetchUsesFlowViewsWhenConfigured(t *testing.T) {
+	calls := 0
+	m := model.NewWithOptions(testRepos(), model.Options{
+		ListFlows: func(flowstore.FlowFilter) ([]flowstore.FlowRecord, error) {
+			t.Fatal("ListFlows should not be used when ListFlowViews is configured")
+			return nil, nil
+		},
+		ListFlowViews: func(filter flowstore.FlowFilter) ([]model.FlowView, error) {
+			calls++
+			return []model.FlowView{{
+				Record: flowstore.FlowRecord{
+					FlowID:   "flow-1",
+					RepoPath: filter.RepoPath,
+					Title:    "Runtime Flow",
+					Status:   flowstore.StatusInProgress,
+				},
+				RuntimeJobs: map[string]model.FlowRuntimeJob{
+					"plan": {ID: "job-1", FlowID: "flow-1", PhaseID: "plan", Status: "running"},
+				},
+			}}, nil
+		},
+	})
+	m = inRightPane(m)
+	m, cmd := update(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'8'}})
+	result := flowResultFromCommand(t, cmd)
+	if calls != 1 {
+		t.Fatalf("ListFlowViews calls = %d, want 1", calls)
+	}
+	if len(result.FlowViews) != 1 || result.FlowViews[0].RuntimeJobs["plan"].ID != "job-1" {
+		t.Fatalf("FlowResultMsg views = %#v", result.FlowViews)
+	}
+}
+
+func TestModel_XKeyOnDaemonRuntimeJobConfirmsAndCancels(t *testing.T) {
+	flow := flowWithPhaseDetails()
+	flow.Phases[2].Status = flowstore.PhaseRunning
+	cancelCalls := 0
+	listCalls := 0
+	m := model.NewWithOptions(testRepos(), model.Options{
+		CancelRuntimeJob: func(jobID string) (model.FlowRuntimeJob, error) {
+			cancelCalls++
+			if jobID != "job-1" {
+				t.Fatalf("cancel job id = %q, want job-1", jobID)
+			}
+			return model.FlowRuntimeJob{ID: jobID, FlowID: flow.FlowID, PhaseID: "implementation", Status: "canceled"}, nil
+		},
+		ListFlowViews: func(filter flowstore.FlowFilter) ([]model.FlowView, error) {
+			listCalls++
+			flow.RepoPath = filter.RepoPath
+			return []model.FlowView{{Record: flow}}, nil
+		},
+	})
+	m = flowsInRightPane(t, m, []flowstore.FlowRecord{flow})
+	m, _ = update(m, model.FlowResultMsg{
+		RepoPath: "/dev/alpha",
+		Flows:    []flowstore.FlowRecord{flow},
+		FlowViews: []model.FlowView{{
+			Record: flow,
+			RuntimeJobs: map[string]model.FlowRuntimeJob{
+				"implementation": {ID: "job-1", FlowID: flow.FlowID, PhaseID: "implementation", Status: "running"},
+			},
+		}},
+		ListRequest: m.ListRequest(ui.ModeFlows),
+	})
+	m = selectFlowPhaseByID(t, m, "implementation")
+
+	view := m.View()
+	if !strings.Contains(view, "x      cancel job") || strings.Contains(view, "x      reset ready") {
+		t.Fatalf("runtime job shortcut should advertise cancel, not reset:\n%s", view)
+	}
+	m, cmd := update(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	if cmd != nil {
+		t.Fatalf("opening cancel confirmation returned command %T, want nil", cmd)
+	}
+	if m.Overlay() != ui.OverlayConfirm || !strings.Contains(m.ConfirmPrompt(), "Cancel Flow runtime job job-1") {
+		t.Fatalf("cancel confirmation prompt = %q overlay=%d", m.ConfirmPrompt(), m.Overlay())
+	}
+	m, cmd = update(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	if cmd == nil {
+		t.Fatal("accepting cancel confirmation should return command")
+	}
+	m, cancelCmd := update(m, cmd())
+	if cancelCmd == nil {
+		t.Fatal("confirmed runtime cancel should return cancel command")
+	}
+	m, fetchCmd := update(m, cancelCmd())
+	if cancelCalls != 1 {
+		t.Fatalf("cancel calls = %d, want 1", cancelCalls)
+	}
+	if got := m.TransientError(); !strings.Contains(got, "canceled Flow runtime job job-1") {
+		t.Fatalf("status after cancel = %q", got)
+	}
+	if fetchCmd == nil {
+		t.Fatal("runtime cancel should refresh flows")
+	}
+	_ = flowResultFromCommand(t, fetchCmd)
+	if listCalls != 1 {
+		t.Fatalf("ListFlowViews calls = %d, want 1", listCalls)
+	}
+}
+
+func TestModel_XKeyOnTerminalDaemonRuntimeJobDoesNotCancel(t *testing.T) {
+	for _, status := range []string{"succeeded", "failed", "canceled"} {
+		t.Run(status, func(t *testing.T) {
+			flow := flowWithAwaitingImplementation()
+			cancelCalls := 0
+			m := model.NewWithOptions(testRepos(), model.Options{
+				CancelRuntimeJob: func(jobID string) (model.FlowRuntimeJob, error) {
+					cancelCalls++
+					return model.FlowRuntimeJob{}, nil
+				},
+			})
+			m = flowsInRightPane(t, m, []flowstore.FlowRecord{flow})
+			m, _ = update(m, model.FlowResultMsg{
+				RepoPath: "/dev/alpha",
+				Flows:    []flowstore.FlowRecord{flow},
+				FlowViews: []model.FlowView{{
+					Record: flow,
+					RuntimeJobs: map[string]model.FlowRuntimeJob{
+						"implementation": {ID: "job-1", FlowID: flow.FlowID, PhaseID: "implementation", Status: status},
+					},
+				}},
+				ListRequest: m.ListRequest(ui.ModeFlows),
+			})
+			m = selectFlowPhaseByID(t, m, "implementation")
+
+			view := m.View()
+			if strings.Contains(view, "cancel job") {
+				t.Fatalf("terminal runtime job should not expose cancel shortcut:\n%s", view)
+			}
+			if !strings.Contains(view, "reset ready") {
+				t.Fatalf("terminal runtime job should leave eligible reset shortcut intact:\n%s", view)
+			}
+			m, cmd := update(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+			if cmd != nil {
+				t.Fatalf("opening reset confirmation returned command %T, want nil", cmd)
+			}
+			if m.Overlay() != ui.OverlayConfirm || !strings.Contains(m.ConfirmPrompt(), "Reset Flow phase implementation") {
+				t.Fatalf("x should fall through to reset prompt, got %q overlay=%d", m.ConfirmPrompt(), m.Overlay())
+			}
+			if cancelCalls != 0 {
+				t.Fatalf("cancel calls = %d, want 0", cancelCalls)
+			}
+		})
+	}
+}
+
 func TestModel_XKeyOnResettableFlowPhaseConfirmsAndResets(t *testing.T) {
 	awaiting := flowWithAwaitingImplementation()
 	reset := flowWithPhaseDetails()
@@ -6346,7 +6525,12 @@ func TestModel_GOnFlowPhaseWithCodexAppUsesExternalLaunchRoute(t *testing.T) {
 		AgentCommand:     "codex-app",
 		SessionStateRoot: "/state/wtui/sessions/v1",
 		AddFlowPhaseLaunchID: func(update flowstore.PhaseLaunchUpdate) (flowstore.FlowRecord, error) {
-			return flowstore.FlowRecord{FlowID: update.FlowID}, nil
+			t.Fatalf("codex-app daemon-mode launch should not persist launch locally: %#v", update)
+			return flowstore.FlowRecord{}, nil
+		},
+		LaunchFlowPhase: func(req model.DaemonFlowPhaseLaunchRequest) (model.DaemonFlowPhaseLaunchResult, error) {
+			t.Fatalf("codex-app should use external app route, not daemon runtime launch: %#v", req)
+			return model.DaemonFlowPhaseLaunchResult{}, nil
 		},
 		LaunchAgent: func(ctx actions.AgentLaunchContext) (actions.TerminalLaunchSpec, error) {
 			launched = ctx
@@ -8332,6 +8516,76 @@ func TestModel_GUsesFlowPhaseOrderingForReadyLaunch(t *testing.T) {
 
 	if launchUpdate.PhaseID != "implementation-api" {
 		t.Fatalf("launched phase = %q, want child phase before review-loop", launchUpdate.PhaseID)
+	}
+}
+
+func TestModel_GLaunchesFlowPhaseThroughDaemonAdapterWhenConfigured(t *testing.T) {
+	var launchReq model.DaemonFlowPhaseLaunchRequest
+	embeddedStarts := 0
+	refreshes := 0
+	m := model.NewWithOptions(testRepos(), model.Options{
+		AgentCommand:         "codex",
+		CodexReasoningEffort: "high",
+		AddFlowPhaseLaunchID: func(update flowstore.PhaseLaunchUpdate) (flowstore.FlowRecord, error) {
+			t.Fatalf("daemon-backed Flow phase launch should not persist launch locally: %#v", update)
+			return flowstore.FlowRecord{}, nil
+		},
+		LaunchFlowPhase: func(req model.DaemonFlowPhaseLaunchRequest) (model.DaemonFlowPhaseLaunchResult, error) {
+			launchReq = req
+			return model.DaemonFlowPhaseLaunchResult{
+				FlowID:   req.FlowID,
+				PhaseID:  req.PhaseID,
+				LaunchID: "daemon-launch-1",
+			}, nil
+		},
+		StartEmbeddedTerminal: func(actions.AgentLaunchContext, int, int) (model.EmbeddedTerminal, error) {
+			embeddedStarts++
+			return &fakeEmbeddedTerminal{state: "running"}, nil
+		},
+		ListFlows: func(filter flowstore.FlowFilter) ([]flowstore.FlowRecord, error) {
+			refreshes++
+			return []flowstore.FlowRecord{{
+				FlowID:   "flow-1",
+				RepoPath: filter.RepoPath,
+				Title:    "Daemon Flow",
+				Status:   flowstore.StatusInProgress,
+				Phases: []flowstore.FlowPhase{
+					{PhaseID: "implementation", Title: "Implementation", Status: flowstore.PhaseRunning},
+				},
+			}}, nil
+		},
+	})
+	m = flowsInRightPane(t, m, []flowstore.FlowRecord{flowWithPhaseDetails()})
+
+	m, cmd := prepareSelectedFlowPhaseLaunch(t, m, "implementation")
+	if cmd == nil {
+		t.Fatal("g should return daemon launch command")
+	}
+	msg := cmd()
+	launched, ok := msg.(model.FlowPhaseLaunchedMsg)
+	if !ok {
+		t.Fatalf("command returned %T, want FlowPhaseLaunchedMsg", msg)
+	}
+	if launched.FlowID != "flow-1" || launched.PhaseID != "implementation" || launched.LaunchID != "daemon-launch-1" || !launched.DaemonRun {
+		t.Fatalf("launched message = %#v", launched)
+	}
+	if launchReq.FlowID != "flow-1" || launchReq.PhaseID != "implementation" ||
+		launchReq.AgentCommand != "codex" || launchReq.ReasoningEffort != "high" {
+		t.Fatalf("daemon launch request = %#v", launchReq)
+	}
+	m, cmd = update(m, launched)
+	if cmd == nil {
+		t.Fatal("daemon launch should refresh Flow surface")
+	}
+	result := flowResultFromCommand(t, cmd)
+	if result.RepoPath != "/dev/alpha" || len(result.Flows) != 1 {
+		t.Fatalf("refresh result = %#v", result)
+	}
+	if embeddedStarts != 0 {
+		t.Fatalf("embedded starts = %d, want 0", embeddedStarts)
+	}
+	if refreshes != 1 {
+		t.Fatalf("ListFlows refreshes = %d, want 1", refreshes)
 	}
 }
 

@@ -24,6 +24,7 @@ type Mutation {
   launchFlowPhase(input: LaunchFlowPhaseInput!): LaunchFlowPhasePayload!
   cancelRuntimeJob(id: ID!): RuntimeJob!
   setFlowPhaseStatus(input: SetFlowPhaseStatusInput!): SetFlowPhaseStatusPayload!
+  resetFlowPhase(input: ResetFlowPhaseInput!): ResetFlowPhasePayload!
   restartFlowPhase(input: RestartFlowPhaseInput!): RestartFlowPhasePayload!
   addFlowChildPhase(input: AddFlowChildPhaseInput!): AddFlowChildPhasePayload!
   setFlowPlanLink(input: SetFlowPlanLinkInput!): SetFlowPlanLinkPayload!
@@ -107,6 +108,16 @@ input SetFlowPhaseStatusInput {
 }
 
 type SetFlowPhaseStatusPayload {
+  flow: Flow!
+  phase: FlowPhase!
+}
+
+input ResetFlowPhaseInput {
+  flowId: ID!
+  phaseId: ID!
+}
+
+type ResetFlowPhasePayload {
   flow: Flow!
   phase: FlowPhase!
 }

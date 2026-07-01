@@ -5,6 +5,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/brian-bell/flowstate/actions"
+	"github.com/brian-bell/flowstate/agent"
 	"github.com/brian-bell/flowstate/flowlaunch"
 	"github.com/brian-bell/flowstate/flowstore"
 	"github.com/brian-bell/flowstate/internal/artifacts"
@@ -24,6 +26,19 @@ type FlowPhaseLaunchPreparedRequest = flowlaunch.PreparedRequest
 type FlowPhaseLaunchResult = flowlaunch.Result
 
 type FlowPhaseLaunchValidationError = flowlaunch.ValidationError
+
+type DaemonFlowPhaseLaunchRequest struct {
+	FlowID          string
+	PhaseID         string
+	AgentCommand    string
+	ReasoningEffort string
+}
+
+type DaemonFlowPhaseLaunchResult struct {
+	FlowID   string
+	PhaseID  string
+	LaunchID string
+}
 
 type FlowPhaseLauncher struct {
 	CurrentRepoPath      func() (string, bool)
@@ -152,6 +167,32 @@ func (m Model) flowPhaseLaunchTarget(req FlowPhaseLaunchRequest) (flowPhaseLaunc
 
 func (m Model) prepareFlowPhaseLaunch(target flowPhaseLaunchTarget) tea.Cmd {
 	return func() tea.Msg {
+		if m.launchFlowPhase != nil {
+			command, reasoningEffort := m.flowLaunchAgentSettings()
+			if command == agent.CommandCodexApp {
+				msg, err := m.prepareCodexAppFlowPhaseLaunch(target, command)
+				if err != nil {
+					return ActionFailedMsg{RepoPath: target.RepoPath, Err: err.Error()}
+				}
+				return msg
+			}
+			result, err := m.launchFlowPhase(DaemonFlowPhaseLaunchRequest{
+				FlowID:          target.Record.FlowID,
+				PhaseID:         target.Phase.PhaseID,
+				AgentCommand:    command,
+				ReasoningEffort: reasoningEffort,
+			})
+			if err != nil {
+				return ActionFailedMsg{RepoPath: target.RepoPath, Err: err.Error()}
+			}
+			return FlowPhaseLaunchedMsg{
+				RepoPath:  target.RepoPath,
+				FlowID:    result.FlowID,
+				PhaseID:   result.PhaseID,
+				LaunchID:  result.LaunchID,
+				DaemonRun: true,
+			}
+		}
 		result, err := m.flowPhaseLauncher().Prepare(target.FlowPhaseLaunchPreparedRequest)
 		if err != nil {
 			return ActionFailedMsg{RepoPath: target.RepoPath, Err: err.Error()}
@@ -161,6 +202,32 @@ func (m Model) prepareFlowPhaseLaunch(target flowPhaseLaunchTarget) tea.Cmd {
 		}
 		return m.flowPhaseLaunchMessage(result)
 	}
+}
+
+func (m Model) prepareCodexAppFlowPhaseLaunch(target flowPhaseLaunchTarget, command string) (tea.Msg, error) {
+	planBody := ""
+	if target.Record.PlanID != "" && flowPhasePromptNeedsPlanBody(target.Phase.PhaseID) {
+		body, err := m.readPlan(target.Record.PlanID)
+		if err != nil {
+			return nil, err
+		}
+		planBody = body
+	}
+	return PlanLaunchRequestedMsg{LaunchContext: actions.AgentLaunchContext{
+		Command:           command,
+		LaunchID:          target.LaunchID,
+		RepoPath:          target.RepoPath,
+		WorktreePath:      target.WorktreePath,
+		Branch:            target.Record.Branch,
+		Commit:            target.Record.Commit,
+		SessionStateRoot:  m.sessionStateRoot,
+		PlanID:            target.Record.PlanID,
+		PlanPath:          target.PlanPath,
+		FlowID:            target.Record.FlowID,
+		FlowPhaseID:       target.Phase.PhaseID,
+		FlowPhaseTerminal: flowstore.PhaseStatusTerminal(target.Phase.Status),
+		InitialPrompt:     flowPhasePrompt(target.Record, target.Phase, target.PlanPath, planBody, m.flowPromptTemplates),
+	}}, nil
 }
 
 func (m Model) flowPhaseLaunchMessage(result FlowPhaseLaunchResult) tea.Msg {

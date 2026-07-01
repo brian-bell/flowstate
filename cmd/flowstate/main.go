@@ -432,6 +432,13 @@ func modelOptionsFromConfig(cfg config.Config, scanRepos func() ([]scanner.Repo,
 		ListFlows: func(filter flowstore.FlowFilter) ([]flowstore.FlowRecord, error) {
 			return flowClient.ListFlows(context.Background(), filter)
 		},
+		ListFlowViews: func(filter flowstore.FlowFilter) ([]model.FlowView, error) {
+			views, err := flowClient.ListFlowViews(context.Background(), filter)
+			if err != nil {
+				return nil, err
+			}
+			return modelFlowViewsFromDaemon(views), nil
+		},
 		CreateFlow: func(req model.FlowStartRequest) (model.FlowStartResult, error) {
 			result, err := flowClient.StartFlow(context.Background(), daemonclient.StartFlowInput{
 				RepoPath:     req.RepoPath,
@@ -464,8 +471,30 @@ func modelOptionsFromConfig(cfg config.Config, scanRepos func() ([]scanner.Repo,
 				DaemonLaunched: result.LaunchID != "" || result.Job != nil || result.LaunchError != "",
 			}, nil
 		},
+		LaunchFlowPhase: func(req model.DaemonFlowPhaseLaunchRequest) (model.DaemonFlowPhaseLaunchResult, error) {
+			result, err := flowClient.LaunchFlowPhase(context.Background(), req.FlowID, req.PhaseID, req.AgentCommand, req.ReasoningEffort)
+			if err != nil {
+				return model.DaemonFlowPhaseLaunchResult{}, err
+			}
+			return model.DaemonFlowPhaseLaunchResult{
+				FlowID:   result.FlowID,
+				PhaseID:  result.PhaseID,
+				LaunchID: result.LaunchID,
+			}, nil
+		},
+		CancelRuntimeJob: func(jobID string) (model.FlowRuntimeJob, error) {
+			job, err := flowClient.CancelRuntimeJob(context.Background(), jobID)
+			if err != nil {
+				return model.FlowRuntimeJob{}, err
+			}
+			return modelFlowRuntimeJobFromDaemon(job), nil
+		},
 		SetFlowPhase: func(update flowstore.PhaseUpdate) (flowstore.FlowRecord, error) {
 			record, _, err := flowClient.SetPhase(context.Background(), update)
+			return record, err
+		},
+		ResetFlowPhase: func(update flowstore.PhaseResetUpdate) (flowstore.FlowRecord, error) {
+			record, _, err := flowClient.ResetFlowPhase(context.Background(), update)
 			return record, err
 		},
 		SetFlowAutoMode: func(update flowstore.AutoModeUpdate) (flowstore.FlowRecord, error) {
@@ -512,6 +541,36 @@ func modelOptionsFromConfig(cfg config.Config, scanRepos func() ([]scanner.Repo,
 		ResetPromptTemplate: func(section, key string) error {
 			return config.ResetPromptTemplate(section, key)
 		},
+	}
+}
+
+func modelFlowViewsFromDaemon(views []daemonclient.FlowView) []model.FlowView {
+	out := make([]model.FlowView, 0, len(views))
+	for _, view := range views {
+		runtimeJobs := make(map[string]model.FlowRuntimeJob, len(view.RuntimeJobs))
+		for phaseID, job := range view.RuntimeJobs {
+			runtimeJobs[phaseID] = modelFlowRuntimeJobFromDaemon(job)
+		}
+		out = append(out, model.FlowView{Record: view.Record, RuntimeJobs: runtimeJobs})
+	}
+	return out
+}
+
+func modelFlowRuntimeJobFromDaemon(job daemonclient.RuntimeJob) model.FlowRuntimeJob {
+	return model.FlowRuntimeJob{
+		ID:               job.ID,
+		LaunchID:         job.LaunchID,
+		FlowID:           job.FlowID,
+		PhaseID:          job.PhaseID,
+		Status:           job.Status,
+		CreatedAt:        job.CreatedAt,
+		StartedAt:        job.StartedAt,
+		EndedAt:          job.EndedAt,
+		ExitCode:         job.ExitCode,
+		Error:            job.Error,
+		PhaseUpdateError: job.PhaseUpdateError,
+		LogTail:          job.LogTail,
+		LogTruncated:     job.LogTruncated,
 	}
 }
 

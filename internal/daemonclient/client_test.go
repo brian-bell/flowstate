@@ -331,6 +331,47 @@ func TestClientMutationMethodsRoundTripThroughGraphQL(t *testing.T) {
 	}
 }
 
+func TestClientResetFlowPhaseRoundTripsThroughGraphQL(t *testing.T) {
+	store, url, _ := newClientGraphQLServerWithRoot(t, "test-token")
+	record := createClientFlow(t, store, flowstore.FlowRecord{
+		FlowID:       "reset-flow",
+		Title:        "Reset Flow",
+		Instructions: "reset instructions",
+		RepoPath:     t.TempDir(),
+	})
+	mustSetClientPhase(t, store, record.FlowID, "plan", flowstore.PhaseCompleted)
+	if _, err := store.SetPhase(flowstore.PhaseUpdate{
+		FlowID:  record.FlowID,
+		PhaseID: "plan-review",
+		Status:  flowstore.PhaseCompleted,
+		Outcome: flowstore.OutcomeApproved,
+	}); err != nil {
+		t.Fatalf("SetPhase plan-review completed: %v", err)
+	}
+	if _, err := store.AddPhaseLaunchID(flowstore.PhaseLaunchUpdate{
+		FlowID:   record.FlowID,
+		PhaseID:  "implementation",
+		LaunchID: "orphan-launch",
+	}); err != nil {
+		t.Fatalf("AddPhaseLaunchID: %v", err)
+	}
+	client, err := New(Options{EndpointURL: url, Token: "test-token"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	updated, phase, err := client.ResetFlowPhase(context.Background(), flowstore.PhaseResetUpdate{
+		FlowID:  record.FlowID,
+		PhaseID: "Implementation",
+	})
+	if err != nil {
+		t.Fatalf("ResetFlowPhase: %v", err)
+	}
+	if updated.FlowID != record.FlowID || phase.PhaseID != "implementation" || phase.Status != flowstore.PhaseReady || len(phase.LaunchIDs) != 0 {
+		t.Fatalf("reset result flow=%#v phase=%#v", updated, phase)
+	}
+}
+
 func TestClientMutationNotFoundErrorsClassifyAsFlowstoreNotFound(t *testing.T) {
 	_, url, root := newClientGraphQLServerWithRoot(t, "test-token")
 	client, err := New(Options{EndpointURL: url, Token: "test-token"})
@@ -589,6 +630,19 @@ func createClientFlow(t *testing.T, store *flowstore.Store, record flowstore.Flo
 		t.Fatalf("Create(%s): %v", record.FlowID, err)
 	}
 	return created
+}
+
+func mustSetClientPhase(t *testing.T, store *flowstore.Store, flowID, phaseID, status string) flowstore.FlowRecord {
+	t.Helper()
+	record, err := store.SetPhase(flowstore.PhaseUpdate{
+		FlowID:  flowID,
+		PhaseID: phaseID,
+		Status:  status,
+	})
+	if err != nil {
+		t.Fatalf("SetPhase(%s/%s=%s): %v", flowID, phaseID, status, err)
+	}
+	return record
 }
 
 func saveClientPlan(t *testing.T, root string) (string, string) {

@@ -94,8 +94,11 @@ type Model struct {
 	readTranscript             func(sessions.Provider, string) ([]sessions.TranscriptEvent, error)
 	listPlans                  func(planstore.PlanFilter) ([]planstore.PlanRecord, error)
 	listFlows                  func(flowstore.FlowFilter) ([]flowstore.FlowRecord, error)
+	listFlowViews              func(flowstore.FlowFilter) ([]FlowView, error)
 	createFlow                 func(FlowStartRequest) (FlowStartResult, error)
 	startFlowPlan              func(FlowStartRequest) (FlowStartResult, error)
+	launchFlowPhase            func(DaemonFlowPhaseLaunchRequest) (DaemonFlowPhaseLaunchResult, error)
+	cancelRuntimeJob           func(string) (FlowRuntimeJob, error)
 	setFlowPhase               func(flowstore.PhaseUpdate) (flowstore.FlowRecord, error)
 	setFlowAutoMode            func(flowstore.AutoModeUpdate) (flowstore.FlowRecord, error)
 	addFlowPhaseLaunchID       func(flowstore.PhaseLaunchUpdate) (flowstore.FlowRecord, error)
@@ -119,6 +122,7 @@ type Model struct {
 	nextEmbeddedTerminalID     int
 	activeEmbeddedTerminalNum  int
 	activeFlowTerminalNum      int
+	flowRuntimeJobs            map[string]map[string]FlowRuntimeJob
 	flowFocus                  flowFocus
 	deferredAutoFlowLaunches   map[deferredAutoFlowLaunchKey]struct{}
 	suppressedAutoFlowLaunches map[suppressedAutoFlowLaunchKey]struct{}
@@ -179,8 +183,11 @@ type Options struct {
 	ReadTranscript           func(sessions.Provider, string) ([]sessions.TranscriptEvent, error)
 	ListPlans                func(planstore.PlanFilter) ([]planstore.PlanRecord, error)
 	ListFlows                func(flowstore.FlowFilter) ([]flowstore.FlowRecord, error)
+	ListFlowViews            func(flowstore.FlowFilter) ([]FlowView, error)
 	CreateFlow               func(FlowStartRequest) (FlowStartResult, error)
 	StartFlowPlan            func(FlowStartRequest) (FlowStartResult, error)
+	LaunchFlowPhase          func(DaemonFlowPhaseLaunchRequest) (DaemonFlowPhaseLaunchResult, error)
+	CancelRuntimeJob         func(jobID string) (FlowRuntimeJob, error)
 	SetFlowPhase             func(flowstore.PhaseUpdate) (flowstore.FlowRecord, error)
 	SetFlowAutoMode          func(flowstore.AutoModeUpdate) (flowstore.FlowRecord, error)
 	AddFlowPhaseLaunchID     func(flowstore.PhaseLaunchUpdate) (flowstore.FlowRecord, error)
@@ -256,6 +263,16 @@ func NewWithOptions(repos []scanner.Repo, opts Options) Model {
 	listFlows := opts.ListFlows
 	if listFlows == nil {
 		listFlows = func(flowstore.FlowFilter) ([]flowstore.FlowRecord, error) { return nil, nil }
+	}
+	listFlowViews := opts.ListFlowViews
+	if listFlowViews == nil {
+		listFlowViews = func(filter flowstore.FlowFilter) ([]FlowView, error) {
+			records, err := listFlows(filter)
+			if err != nil {
+				return nil, err
+			}
+			return flowViewsFromRecords(records), nil
+		}
 	}
 	setFlowPhase := opts.SetFlowPhase
 	if setFlowPhase == nil {
@@ -338,6 +355,8 @@ func NewWithOptions(repos []scanner.Repo, opts Options) Model {
 	}
 	createFlowForRepo := opts.CreateFlow
 	startFlowPlan := opts.StartFlowPlan
+	launchFlowPhase := opts.LaunchFlowPhase
+	cancelRuntimeJob := opts.CancelRuntimeJob
 	if createFlowForRepo == nil {
 		createFlowForRepo = func(req FlowStartRequest) (FlowStartResult, error) {
 			return FlowStartResult{}, fmt.Errorf("flow daemon client is not configured")
@@ -382,8 +401,11 @@ func NewWithOptions(repos []scanner.Repo, opts Options) Model {
 		readTranscript:           readTranscript,
 		listPlans:                listPlans,
 		listFlows:                listFlows,
+		listFlowViews:            listFlowViews,
 		createFlow:               createFlowForRepo,
 		startFlowPlan:            startFlowPlan,
+		launchFlowPhase:          launchFlowPhase,
+		cancelRuntimeJob:         cancelRuntimeJob,
 		setFlowPhase:             setFlowPhase,
 		setFlowAutoMode:          setFlowAutoMode,
 		addFlowPhaseLaunchID:     addFlowPhaseLaunchID,
@@ -711,6 +733,7 @@ func (m Model) View() string {
 		FlowReasoningEffort:         m.flowReasoningEffortLabel(),
 		DefaultViewLabel:            ViewChoiceLabel(m.defaultView),
 		FlowNextLaunchReady:         m.selectedFlowHasLaunchablePhase(),
+		FlowRuntimeCancelReady:      m.selectedFlowPhaseRuntimeCancellable(),
 		FlowPhaseResetReadySelected: m.selectedFlowPhaseResettable(),
 		FlowPhaseResumableSelected:  m.selectedFlowPhaseResumable(),
 		OverlayText:                 modalView.Text,
@@ -1112,6 +1135,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleFlowAutoModeSet(msg), nil
 	case FlowAutoModeSetFailedMsg:
 		return m.handleFlowAutoModeSetFailed(msg), nil
+	case flowRuntimeJobCancelConfirmedMsg:
+		return m.handleFlowRuntimeJobCancelConfirmed(msg)
+	case flowRuntimeJobCancelledMsg:
+		return m.handleFlowRuntimeJobCancelled(msg)
+	case flowRuntimeJobCancelFailedMsg:
+		return m.handleFlowRuntimeJobCancelFailed(msg)
 	case flowPhaseResetConfirmedMsg:
 		return m.handleFlowPhaseResetConfirmed(msg)
 	case flowPhaseResetMsg:
@@ -1209,6 +1238,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return next, tea.Batch(fetchCmd, launchCmd)
 		}
 		return next, launchCmd
+	case FlowPhaseLaunchedMsg:
+		return m.handleFlowPhaseLaunched(msg)
 	case FlowCreatedMsg:
 		return m.handleFlowCreated(msg)
 	case FlowCreateFailedMsg:

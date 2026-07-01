@@ -122,11 +122,11 @@ func listFetchDescriptorForMode(mode ui.Mode) (listFetchDescriptor, bool) {
 			pane:        "flows",
 			errorPrefix: "failed to load flows",
 			load: func(m Model, repoPath string, request uint64) (tea.Msg, error) {
-				records, err := m.listFlows(flowstore.FlowFilter{RepoPath: repoPath})
+				views, err := m.listFlowViews(flowstore.FlowFilter{RepoPath: repoPath})
 				if err != nil {
 					return nil, err
 				}
-				return FlowResultMsg{RepoPath: repoPath, Flows: records, ListRequest: request}, nil
+				return FlowResultMsg{RepoPath: repoPath, Flows: flowRecordsFromViews(views), FlowViews: views, ListRequest: request}, nil
 			},
 		}, true
 	default:
@@ -187,7 +187,7 @@ func (m Model) fetchMode(mode ui.Mode, request uint64) tea.Cmd {
 
 func (m Model) fetchActiveFlows(request uint64) tea.Cmd {
 	return func() tea.Msg {
-		records, err := m.listFlows(flowstore.FlowFilter{})
+		views, err := m.listFlowViews(flowstore.FlowFilter{})
 		if err != nil {
 			return FetchErrorMsg{
 				Pane:        "active-flows",
@@ -197,7 +197,7 @@ func (m Model) fetchActiveFlows(request uint64) tea.Cmd {
 				ListRequest: request,
 			}
 		}
-		return ActiveFlowResultMsg{Flows: records, ListRequest: request}
+		return ActiveFlowResultMsg{Flows: flowRecordsFromViews(views), FlowViews: views, ListRequest: request}
 	}
 }
 

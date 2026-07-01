@@ -1530,6 +1530,19 @@ func (m Model) handleLaunchNextFlowPhase() (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleResetSelectedFlowPhase() (tea.Model, tea.Cmd) {
+	if repoPath, flowID, phaseID, jobID, ok := m.selectedFlowPhaseRuntimeCancelTarget(); ok {
+		m.modal = modal.OpenConfirm(fmt.Sprintf("Cancel Flow runtime job %s?", jobID), func() tea.Cmd {
+			return func() tea.Msg {
+				return flowRuntimeJobCancelConfirmedMsg{
+					RepoPath: repoPath,
+					FlowID:   flowID,
+					PhaseID:  phaseID,
+					JobID:    jobID,
+				}
+			}
+		})
+		return m, nil
+	}
 	record, phase, repoPath, ok := m.selectedFlowPhaseResetTarget()
 	if !ok {
 		return m, nil
@@ -1544,6 +1557,43 @@ func (m Model) handleResetSelectedFlowPhase() (tea.Model, tea.Cmd) {
 		}
 	})
 	return m, nil
+}
+
+func (m Model) selectedFlowPhaseRuntimeCancelTarget() (repoPath, flowID, phaseID, jobID string, ok bool) {
+	record, recordOK := m.selectedFlow()
+	phase, phaseOK := m.selectedFlowPhase()
+	if !recordOK || !phaseOK || record.FlowID == "" {
+		return "", "", "", "", false
+	}
+	job, ok := m.flowRuntimeJobs[record.FlowID][artifacts.NormalizePhaseID(phase.PhaseID)]
+	if !ok || !flowRuntimeJobCancellable(job) {
+		return "", "", "", "", false
+	}
+	repoPath = record.RepoPath
+	if repoPath == "" {
+		repoPath, _ = m.currentRepoPath()
+	}
+	if repoPath == "" {
+		return "", "", "", "", false
+	}
+	return repoPath, record.FlowID, phase.PhaseID, job.ID, true
+}
+
+func (m Model) selectedFlowPhaseRuntimeCancellable() bool {
+	_, _, _, _, ok := m.selectedFlowPhaseRuntimeCancelTarget()
+	return ok
+}
+
+func flowRuntimeJobCancellable(job FlowRuntimeJob) bool {
+	if strings.TrimSpace(job.ID) == "" {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(job.Status)) {
+	case "", "queued", "starting", "running", "canceling":
+		return true
+	default:
+		return false
+	}
 }
 
 func (m Model) selectedFlowPhaseResetTarget() (flowstore.FlowRecord, flowstore.FlowPhase, string, bool) {
@@ -1646,6 +1696,38 @@ func flowEmbeddedTerminalSlotMatchesPhaseLaunch(slot embeddedTerminalSlot, flowI
 	}
 	launchID = strings.TrimSpace(launchID)
 	return launchID == "" || strings.TrimSpace(slot.LaunchID) == launchID
+}
+
+func (m Model) handleFlowRuntimeJobCancelConfirmed(msg flowRuntimeJobCancelConfirmedMsg) (Model, tea.Cmd) {
+	if !m.activeFlowSurfaceVisible() && !m.isCurrentRepo(msg.RepoPath) {
+		return m, nil
+	}
+	if m.cancelRuntimeJob == nil {
+		return m.setStatus(statusOther, "flow daemon runtime cancel is not configured"), nil
+	}
+	return m, m.cancelRuntimeJobCmd(msg.RepoPath, msg.FlowID, msg.PhaseID, msg.JobID)
+}
+
+func (m Model) cancelRuntimeJobCmd(repoPath, flowID, phaseID, jobID string) tea.Cmd {
+	return func() tea.Msg {
+		job, err := m.cancelRuntimeJob(jobID)
+		if err != nil {
+			return flowRuntimeJobCancelFailedMsg{
+				RepoPath: repoPath,
+				FlowID:   flowID,
+				PhaseID:  phaseID,
+				JobID:    jobID,
+				Err:      fmt.Sprintf("failed to cancel Flow runtime job: %v", err),
+			}
+		}
+		return flowRuntimeJobCancelledMsg{
+			RepoPath: repoPath,
+			FlowID:   flowID,
+			PhaseID:  phaseID,
+			JobID:    jobID,
+			Job:      job,
+		}
+	}
 }
 
 func (m Model) handleFlowPhaseResetConfirmed(msg flowPhaseResetConfirmedMsg) (Model, tea.Cmd) {

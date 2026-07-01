@@ -59,6 +59,7 @@ type FlowClient interface {
 	ReadFlowView(context.Context, string) (FlowView, error)
 	CreateRawFlow(context.Context, flowstore.FlowRecord) (flowstore.FlowRecord, error)
 	SetPhase(context.Context, flowstore.PhaseUpdate) (flowstore.FlowRecord, flowstore.FlowPhase, error)
+	ResetFlowPhase(context.Context, flowstore.PhaseResetUpdate) (flowstore.FlowRecord, flowstore.FlowPhase, error)
 	RestartFlowPhase(context.Context, flowstore.PhaseRestartUpdate) (flowstore.FlowRecord, flowstore.FlowPhase, error)
 	AddFlowChildPhase(context.Context, flowstore.ChildPhaseUpdate) (flowstore.FlowRecord, flowstore.FlowPhase, error)
 	SetFlowPlanLink(context.Context, flowstore.PlanLinkUpdate) (flowstore.FlowRecord, error)
@@ -152,7 +153,7 @@ func New(opts Options) (*Client, error) {
 	}
 	httpClient := opts.HTTPClient
 	if httpClient == nil {
-		httpClient = http.DefaultClient
+		httpClient = &http.Client{Timeout: 15 * time.Second}
 	}
 	maxAttempts := opts.MaxAttempts
 	if maxAttempts <= 0 {
@@ -299,6 +300,20 @@ func (c *Client) SetPhase(ctx context.Context, update flowstore.PhaseUpdate) (fl
 		return flowstore.FlowRecord{}, flowstore.FlowPhase{}, err
 	}
 	return data.SetFlowPhaseStatus.Flow.record(), data.SetFlowPhaseStatus.Phase.phase(), nil
+}
+
+func (c *Client) ResetFlowPhase(ctx context.Context, update flowstore.PhaseResetUpdate) (flowstore.FlowRecord, flowstore.FlowPhase, error) {
+	input := map[string]any{"flowId": update.FlowID, "phaseId": update.PhaseID}
+	var data struct {
+		ResetFlowPhase struct {
+			Flow  flowDTO      `json:"flow"`
+			Phase flowPhaseDTO `json:"phase"`
+		} `json:"resetFlowPhase"`
+	}
+	if err := c.mutation(ctx, resetFlowPhaseMutation, map[string]any{"input": input}, &data); err != nil {
+		return flowstore.FlowRecord{}, flowstore.FlowPhase{}, err
+	}
+	return data.ResetFlowPhase.Flow.record(), data.ResetFlowPhase.Phase.phase(), nil
 }
 
 func (c *Client) RestartFlowPhase(ctx context.Context, update flowstore.PhaseRestartUpdate) (flowstore.FlowRecord, flowstore.FlowPhase, error) {
@@ -868,6 +883,21 @@ const createRawFlowMutation = `mutation($input: RawFlowInput!) {
 
 const setFlowPhaseStatusMutation = `mutation($input: SetFlowPhaseStatusInput!) {
 	setFlowPhaseStatus(input: $input) {
+		flow { ` + flowFields + ` }
+		phase {
+			phaseId parentPhaseId title kind statusRaw order outcome notes summary launchIds
+			sessions { provider sessionId launchId status startedAt endedAt transcriptPath }
+			activeRuntimeJob {
+				id launchId flowId phaseId status createdAt startedAt endedAt exitCode
+				error phaseUpdateError logTail logTruncated
+			}
+			createdAt updatedAt
+		}
+	}
+}`
+
+const resetFlowPhaseMutation = `mutation($input: ResetFlowPhaseInput!) {
+	resetFlowPhase(input: $input) {
 		flow { ` + flowFields + ` }
 		phase {
 			phaseId parentPhaseId title kind statusRaw order outcome notes summary launchIds

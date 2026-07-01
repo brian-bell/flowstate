@@ -1162,6 +1162,28 @@ func TestRender_FlowsModeShowsResetShortcutForResettableSelectedPhase(t *testing
 	}
 }
 
+func TestRender_FlowsModeShowsCancelShortcutForRuntimeJob(t *testing.T) {
+	view := Render(RenderParams{
+		Repos: []scanner.Repo{{Path: "/dev/wtui", DisplayName: "wtui"}},
+		Width: 120, Height: 24,
+		Mode:                   ModeFlows,
+		ActivePane:             1,
+		Flows:                  []flowstore.FlowRecord{{FlowID: "flow-1", Title: "Runtime flow", Status: flowstore.StatusInProgress, Phases: []flowstore.FlowPhase{{PhaseID: "implementation", Status: flowstore.PhaseRunning}}}},
+		FlowSelected:           0,
+		ExpandedFlowID:         "flow-1",
+		SelectedFlowPhaseID:    "implementation",
+		FlowRuntimeCancelReady: true,
+	})
+
+	pane := shortcutPaneText(view)
+	if !strings.Contains(pane, "x      cancel job") {
+		t.Fatalf("runtime shortcut pane missing cancel job:\n%s", pane)
+	}
+	if strings.Contains(pane, "x      reset ready") {
+		t.Fatalf("runtime shortcut pane should not show reset when cancel owns x:\n%s", pane)
+	}
+}
+
 func TestRender_FlowsModeShowsLaunchAndHeadlessShortcutForLaunchableSelectedPhase(t *testing.T) {
 	view := Render(RenderParams{
 		Repos:    []scanner.Repo{{Path: "/dev/wtui", DisplayName: "wtui"}},
